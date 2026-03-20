@@ -1,0 +1,12 @@
+api_key: devkey
+api_secret: devsecret
+ws_url: ws://livekit:7880
+insecure: true
+enable_room_composite_sdk_source: true
+
+redis:
+  address: redis:6379
+
+health_port: 8081
+logging:
+  level: info

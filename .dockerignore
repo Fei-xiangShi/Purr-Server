@@ -1,0 +1,12 @@
+# Gradle
+.gradle/
+
+# IDE
+.idea/
+*.iml
+
+# Git
+.git/
+
+# Local env
+.env

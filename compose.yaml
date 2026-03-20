@@ -1,0 +1,140 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  minio:
+    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-02-21T16-00-46Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+    volumes:
+      - ./docker/minio/init.sh:/init.sh:ro
+    entrypoint: ["/bin/sh", "/init.sh"]
+
+  livekit:
+    image: livekit/livekit-server:latest
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["--config", "/etc/livekit/livekit.yaml"]
+    environment:
+      NODE_IP: ${LIVEKIT_NODE_IP}
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-50100:50000-50100/udp"
+    volumes:
+      - ./docker/livekit/livekit.yaml:/etc/livekit/livekit.yaml:ro
+
+  egress:
+    image: livekit/egress:latest
+    depends_on:
+      redis:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress/egress.yaml
+    cap_add:
+      - SYS_ADMIN
+    volumes:
+      - ./docker/egress/egress.yaml:/etc/egress/egress.yaml:ro
+
+  purr-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      livekit:
+        condition: service_started
+      egress:
+        condition: service_started
+    environment:
+      PURR_DB_JDBC_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      PURR_DB_DRIVER_CLASS_NAME: org.postgresql.Driver
+      PURR_DB_USERNAME: ${POSTGRES_USER}
+      PURR_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      PURR_DB_MAXIMUM_POOL_SIZE: 5
+      PURR_AUTH_JWT_SECRET: ${PURR_AUTH_JWT_SECRET}
+      PURR_AUTH_USER_A_PASSWORD: ${PURR_AUTH_USER_A_PASSWORD}
+      PURR_AUTH_USER_B_PASSWORD: ${PURR_AUTH_USER_B_PASSWORD}
+      PURR_LIVEKIT_WS_URL: ${PURR_LIVEKIT_WS_URL}
+      PURR_LIVEKIT_HTTP_URL: http://livekit:7880
+      PURR_LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      PURR_LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      PURR_RECORDING_PROVIDER: livekit
+      PURR_RECORDING_ENABLED: true
+      PURR_RECORDING_ID_PREFIX: rec
+      PURR_RECORDING_FILE_PREFIX: recordings
+      PURR_RECORDING_BUCKET: ${MINIO_BUCKET}
+      PURR_RECORDING_ENDPOINT: http://minio:9000
+      PURR_RECORDING_ACCESS_KEY: ${MINIO_ROOT_USER}
+      PURR_RECORDING_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      PURR_RECORDING_REGION: ${MINIO_REGION}
+      PURR_RECORDING_FORCE_PATH_STYLE: true
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16

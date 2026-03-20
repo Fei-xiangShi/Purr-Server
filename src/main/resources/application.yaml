@@ -1,0 +1,54 @@
+ktor:
+  deployment:
+    port: 8080
+  application:
+    modules:
+      - life.fxs.purr.server.ApplicationKt.module
+
+purr:
+  auth:
+    accessTokenTtlSeconds: 3600
+    issuer: purr-server
+    audience: purr-mobile
+    jwtSecret: dev-jwt-secret-change-me
+    seedUsers:
+      userA:
+        userId: user-a
+        username: user-a
+        password: pass-a
+        displayName: Purr Alpha
+        avatarUrl: ""
+      userB:
+        userId: user-b
+        username: user-b
+        password: pass-b
+        displayName: Purr Beta
+        avatarUrl: ""
+  pair:
+    pairId: pair-demo
+    bondedAtEpochMillis: 1735689600000
+    userAId: user-a
+    userBId: user-b
+  livekit:
+    wsUrl: "ws://localhost:7880"
+    httpUrl: "http://localhost:7880"
+    apiKey: devkey
+    apiSecret: devsecret
+    tokenTtlSeconds: 3600
+  recording:
+    enabled: true
+    provider: stub
+    idPrefix: rec
+    filePrefix: recordings
+    bucket: purr-recordings
+    endpoint: "http://localhost:9000"
+    accessKey: minioadmin
+    secretKey: minioadmin
+    region: us-east-1
+    forcePathStyle: true
+  database:
+    jdbcUrl: "jdbc:h2:mem:purr;MODE=PostgreSQL;DB_CLOSE_DELAY=-1"
+    driverClassName: org.h2.Driver
+    username: sa
+    password: ""
+    maximumPoolSize: 5
