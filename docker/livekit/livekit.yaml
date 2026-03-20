@@ -1,18 +1,2 @@
-port: 7880
-
-redis:
-  address: redis:6379
-
-rtc:
-  port_range_start: 50000
-  port_range_end: 50100
-  tcp_port: 7881
-  use_external_ip: false
-
-keys:
-  devkey: devsecret
-
-webhook:
-  api_key: devkey
-  urls:
-    - http://purr-server:8080/webhooks/livekit
+# 这个文件已经改为说明文件；实际运行配置已迁移到 compose.yaml 里的 LIVEKIT_CONFIG 环境变量。
+# This file is no longer mounted by Docker Compose.

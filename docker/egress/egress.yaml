@@ -1,12 +1,2 @@
-api_key: devkey
-api_secret: devsecret
-ws_url: ws://livekit:7880
-insecure: true
-enable_room_composite_sdk_source: true
-
-redis:
-  address: redis:6379
-
-health_port: 8081
-logging:
-  level: info
+# 这个文件已经改为说明文件；实际运行配置已迁移到 compose.yaml 里的 EGRESS_CONFIG_BODY 环境变量。
+# This file is no longer mounted by Docker Compose.
