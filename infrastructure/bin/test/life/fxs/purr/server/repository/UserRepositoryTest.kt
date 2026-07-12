@@ -38,4 +38,56 @@ class UserRepositoryTest {
             (resources.dataSource as? AutoCloseable)?.close()
         }
     }
+
+    @Test
+    fun `password replacement requires the expected hash`() {
+        val resources = DatabaseFactory(
+            DatabaseConfig(
+                jdbcUrl = "jdbc:h2:mem:user-password-${System.nanoTime()};MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+                driverClassName = "org.h2.Driver",
+                username = "sa",
+                password = "",
+                maximumPoolSize = 2,
+            ),
+        ).connect()
+
+        try {
+            val repository = UserRepository()
+            repository.upsert("user-a", "user-a", "old-password", "User A", null)
+            val originalHash = assertNotNull(repository.findById("user-a")).passwordHash
+            val replacementHash = BCrypt.hashpw("new-password", BCrypt.gensalt())
+
+            assertFalse(repository.replacePasswordHash("user-a", "stale-hash", replacementHash))
+            assertTrue(repository.replacePasswordHash("user-a", originalHash, replacementHash))
+            assertTrue(BCrypt.checkpw("new-password", assertNotNull(repository.findById("user-a")).passwordHash))
+        } finally {
+            (resources.dataSource as? AutoCloseable)?.close()
+        }
+    }
+
+    @Test
+    fun `profile fields can be updated independently`() {
+        val resources = DatabaseFactory(
+            DatabaseConfig(
+                jdbcUrl = "jdbc:h2:mem:user-profile-${System.nanoTime()};MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+                driverClassName = "org.h2.Driver",
+                username = "sa",
+                password = "",
+                maximumPoolSize = 2,
+            ),
+        ).connect()
+
+        try {
+            val repository = UserRepository()
+            repository.upsert("user-a", "user-a", "password", "Old Name", null)
+
+            assertTrue(repository.updateDisplayName("user-a", "New Name"))
+            assertTrue(repository.updateAvatarUrl("user-a", "https://example.test/a.png"))
+            val user = assertNotNull(repository.findById("user-a"))
+            assertEquals("New Name", user.displayName)
+            assertEquals("https://example.test/a.png", user.avatarUrl)
+        } finally {
+            (resources.dataSource as? AutoCloseable)?.close()
+        }
+    }
 }

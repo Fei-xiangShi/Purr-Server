@@ -12,6 +12,12 @@ interface UserAccountStore {
     fun findByUsername(username: String): UserAccountRecord?
 
     fun findById(userId: String): UserAccountRecord?
+
+    fun replacePasswordHash(userId: String, expectedPasswordHash: String, newPasswordHash: String): Boolean
+
+    fun updateAvatarUrl(userId: String, avatarUrl: String): Boolean
+
+    fun updateDisplayName(userId: String, displayName: String): Boolean
 }
 
 data class AuthSessionRecord(
@@ -40,6 +46,8 @@ interface AuthSessionStore {
     fun isActive(sessionId: String, userId: String, nowEpochMillis: Long): Boolean
 
     fun deleteBySessionId(sessionId: String)
+
+    fun deleteAllByUserId(userId: String)
 }
 
 data class PairRecord(
@@ -71,4 +79,8 @@ fun interface AccessTokenIssuer {
 
 fun interface PasswordVerifier {
     fun matches(password: String, passwordHash: String): Boolean
+}
+
+fun interface PasswordHasher {
+    fun hash(password: String): String
 }

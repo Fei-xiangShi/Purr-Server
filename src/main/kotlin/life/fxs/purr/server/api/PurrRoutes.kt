@@ -7,13 +7,17 @@ import io.ktor.server.application.call
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.principal
 import io.ktor.server.request.receive
+import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
+import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import io.ktor.server.plugins.ratelimit.rateLimit
+import io.ktor.http.content.forEachPart
+import io.ktor.utils.io.core.readAvailable
 import kotlinx.serialization.Serializable
 import life.fxs.purr.server.auth.AuthenticatedUser
 import life.fxs.purr.server.model.LoginRequestDto
@@ -23,10 +27,12 @@ import life.fxs.purr.server.model.ActiveCallResponseDto
 import life.fxs.purr.server.service.ServerDependencies
 import life.fxs.purr.server.coroutines.onBlockingIo
 import life.fxs.purr.server.plugins.AuthRateLimit
-import life.fxs.purr.server.application.model.RecordingPageCursorCodec
+import life.fxs.purr.server.application.model.CallHistoryCursorCodec
 import io.micrometer.prometheus.PrometheusMeterRegistry
 import life.fxs.purr.server.application.model.CreateCallSessionCommand
 import life.fxs.purr.server.model.CallRecordingsResponseDto
+import life.fxs.purr.server.model.ChangePasswordRequestDto
+import life.fxs.purr.server.model.UpdateProfileRequestDto
 
 fun Route.registerPurrRoutes(
     dependencies: ServerDependencies,
@@ -88,6 +94,71 @@ fun Route.registerPurrRoutes(
     }
 
     authenticate("auth-jwt") {
+        rateLimit(AuthRateLimit) {
+            put("/me/profile") {
+                val request = call.receive<UpdateProfileRequestDto>()
+                val user = call.requireAuthenticatedUser()
+                call.respond(
+                    onBlockingIo {
+                        dependencies.profileService.updateDisplayName(user.userId, request.displayName).toDto()
+                    },
+                )
+            }
+        }
+
+        rateLimit(AuthRateLimit) {
+            put("/me/avatar") {
+                var fileCount = 0
+                var contentType: String? = null
+                var bytes: ByteArray? = null
+                call.receiveMultipart().forEachPart { part ->
+                    if (part is io.ktor.http.content.PartData.FileItem) {
+                        if (part.name != "avatar") {
+                            part.dispose()
+                            throw ApiException(HttpStatusCode.BadRequest, "Avatar file field is required")
+                        }
+                        fileCount++
+                        if (fileCount > 1) {
+                            part.dispose()
+                            throw ApiException(HttpStatusCode.BadRequest, "Only one avatar file is allowed")
+                        }
+                        contentType = part.contentType?.withoutParameters()?.toString()
+                        bytes = part.provider().use { input -> readAtMost(input, MAX_AVATAR_BYTES + 1) }
+                    }
+                    part.dispose()
+                }
+                val user = call.requireAuthenticatedUser()
+                val uploadBytes = bytes ?: throw ApiException(HttpStatusCode.BadRequest, "Avatar file is required")
+                if (uploadBytes.size > MAX_AVATAR_BYTES) {
+                    throw ApiException(HttpStatusCode.BadRequest, "Avatar must not exceed 10 MB")
+                }
+                call.respond(
+                    onBlockingIo {
+                        dependencies.avatarService.updateAvatar(
+                            userId = user.userId,
+                            contentType = contentType.orEmpty(),
+                            bytes = uploadBytes,
+                        ).toDto()
+                    },
+                )
+            }
+        }
+
+        rateLimit(AuthRateLimit) {
+            put("/me/password") {
+                val request = call.receive<ChangePasswordRequestDto>()
+                val user = call.requireAuthenticatedUser()
+                onBlockingIo {
+                    dependencies.passwordChangeService.changePassword(
+                        userId = user.userId,
+                        currentPassword = request.currentPassword,
+                        newPassword = request.newPassword,
+                    )
+                }
+                call.respond(HttpStatusCode.NoContent)
+            }
+        }
+
         get("/me") {
             val user = call.requireAuthenticatedUser()
             call.respond(onBlockingIo { dependencies.pairService.requireSelfProfile(user.userId).toDto() })
@@ -175,21 +246,21 @@ fun Route.registerPurrRoutes(
             )
         }
 
-        get("/recordings") {
+        get("/calls/history") {
             val user = call.requireAuthenticatedUser()
-            val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: DEFAULT_RECORDING_PAGE_SIZE
-            if (limit !in 1..MAX_RECORDING_PAGE_SIZE) {
-                throw ApiException(HttpStatusCode.BadRequest, "Recording page size must be between 1 and 50")
+            val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: DEFAULT_CALL_HISTORY_PAGE_SIZE
+            if (limit !in 1..MAX_CALL_HISTORY_PAGE_SIZE) {
+                throw ApiException(HttpStatusCode.BadRequest, "Call history page size must be between 1 and 50")
             }
             val rawCursor = call.request.queryParameters["before"]
-            val cursor = rawCursor?.let(RecordingPageCursorCodec::decode)
+            val cursor = rawCursor?.let(CallHistoryCursorCodec::decode)
             if (rawCursor != null && cursor == null) {
-                throw ApiException(HttpStatusCode.BadRequest, "Invalid recording page cursor")
+                throw ApiException(HttpStatusCode.BadRequest, "Invalid call history cursor")
             }
             call.respond(
                 HttpStatusCode.OK,
                 onBlockingIo {
-                    dependencies.recordingQueryService.getRecordingLibrary(user.userId, limit, cursor).toDto()
+                    dependencies.callHistoryQueryService.getHistory(user.userId, limit, cursor).toDto()
                 },
             )
         }
@@ -212,6 +283,21 @@ private data class HealthResponse(
 )
 
 private const val DATABASE_VALIDATION_TIMEOUT_SECONDS = 2
-private const val DEFAULT_RECORDING_PAGE_SIZE = 20
-private const val MAX_RECORDING_PAGE_SIZE = 50
+private const val MAX_AVATAR_BYTES = 10 * 1024 * 1024
+private const val DEFAULT_CALL_HISTORY_PAGE_SIZE = 20
+private const val MAX_CALL_HISTORY_PAGE_SIZE = 50
 private val PrometheusContentType = ContentType.parse("text/plain; version=0.0.4; charset=utf-8")
+
+private fun readAtMost(input: io.ktor.utils.io.core.Input, maxBytes: Int): ByteArray {
+    val output = java.io.ByteArrayOutputStream(minOf(maxBytes, 8 * 1024))
+    val buffer = ByteArray(8 * 1024)
+    var total = 0
+    while (total < maxBytes) {
+        val read = input.readAvailable(buffer, 0, minOf(buffer.size, maxBytes - total))
+        if (read < 0) break
+        if (read == 0) continue
+        output.write(buffer, 0, read)
+        total += read
+    }
+    return output.toByteArray()
+}

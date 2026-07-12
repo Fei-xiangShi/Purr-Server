@@ -4,17 +4,21 @@ import life.fxs.purr.server.application.port.ActiveCallResolution
 import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.application.port.CallSessionStore
 import life.fxs.purr.server.application.port.EndCallResolution
+import life.fxs.purr.server.application.model.CallHistoryCursor
 import life.fxs.purr.server.db.table.CallSessionsTable
 import life.fxs.purr.server.db.table.PairBondsTable
 import life.fxs.purr.server.model.CallState
 import life.fxs.purr.server.model.RecordingStatus
 import org.jetbrains.exposed.sql.ResultRow
+import org.jetbrains.exposed.sql.SortOrder
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.isNull
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.less
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.lessEq
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.isNotNull
 import org.jetbrains.exposed.sql.and
+import org.jetbrains.exposed.sql.or
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -110,6 +114,34 @@ class CallSessionRepository : CallSessionStore {
             return null
         }
         return find(callId)
+    }
+
+    override fun findEndedByPairId(
+        pairId: String,
+        limit: Int,
+        cursor: CallHistoryCursor?,
+    ): List<CallRecord> = transaction {
+        val endedCalls =
+            (CallSessionsTable.pairId eq pairId) and
+                (CallSessionsTable.callState eq CallState.ENDED.wireValue) and
+                CallSessionsTable.endedAtEpochMillis.isNotNull()
+        val condition = cursor?.let {
+            endedCalls and (
+                (CallSessionsTable.startedAtEpochMillis less it.startedAtEpochMillis) or
+                    (
+                        (CallSessionsTable.startedAtEpochMillis eq it.startedAtEpochMillis) and
+                            (CallSessionsTable.callId less it.callId)
+                        )
+                )
+        } ?: endedCalls
+        CallSessionsTable.selectAll()
+            .where { condition }
+            .orderBy(
+                CallSessionsTable.startedAtEpochMillis to SortOrder.DESC,
+                CallSessionsTable.callId to SortOrder.DESC,
+            )
+            .limit(limit)
+            .map { it.toCallRecord() }
     }
 
     fun updateRecording(

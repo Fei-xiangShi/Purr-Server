@@ -35,6 +35,17 @@ data class ActiveCallResult(
     val startedAtEpochMillis: Long,
 )
 
+data class CallHistoryItemResult(
+    val callId: String,
+    val startedAtEpochMillis: Long,
+    val durationMillis: Long,
+)
+
+data class CallHistoryResult(
+    val calls: List<CallHistoryItemResult>,
+    val nextCursor: String?,
+)
+
 data class RecordingResultView(
     val callId: String,
     val status: RecordingStatus,
@@ -59,9 +70,4 @@ data class RecordingDownloadResult(
     val recordingId: String,
     val url: String,
     val expiresAtEpochMillis: Long,
-)
-
-data class RecordingLibraryResult(
-    val recordings: List<CallRecordingResult>,
-    val nextCursor: String?,
 )

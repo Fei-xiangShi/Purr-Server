@@ -3,22 +3,24 @@ package life.fxs.purr.server.api
 import life.fxs.purr.server.application.model.ActiveCallResult
 import life.fxs.purr.server.application.model.AuthSessionResult
 import life.fxs.purr.server.application.model.CallRecordingResult
+import life.fxs.purr.server.application.model.CallHistoryItemResult
+import life.fxs.purr.server.application.model.CallHistoryResult
 import life.fxs.purr.server.application.model.CallSessionResult
 import life.fxs.purr.server.application.model.CallStatusResult
 import life.fxs.purr.server.application.model.PairDetails
 import life.fxs.purr.server.application.model.PartnerProfile
 import life.fxs.purr.server.application.model.RecordingDownloadResult
-import life.fxs.purr.server.application.model.RecordingLibraryResult
 import life.fxs.purr.server.application.model.RecordingResultView
 import life.fxs.purr.server.application.model.UserProfile
 import life.fxs.purr.server.model.ActiveCallDto
 import life.fxs.purr.server.model.AuthSessionDto
 import life.fxs.purr.server.model.CallRecordingDto
+import life.fxs.purr.server.model.CallHistoryItemDto
+import life.fxs.purr.server.model.CallHistoryResponseDto
 import life.fxs.purr.server.model.CallStatusDto
 import life.fxs.purr.server.model.PairBond
 import life.fxs.purr.server.model.PairedPartner
 import life.fxs.purr.server.model.RecordingDownloadDto
-import life.fxs.purr.server.model.RecordingLibraryResponseDto
 import life.fxs.purr.server.model.RecordingResponseDto
 import life.fxs.purr.server.model.SelfProfile
 import life.fxs.purr.server.model.SessionResponseDto
@@ -98,7 +100,13 @@ internal fun RecordingDownloadResult.toDto() = RecordingDownloadDto(
     expiresAtEpochMillis = expiresAtEpochMillis,
 )
 
-internal fun RecordingLibraryResult.toDto() = RecordingLibraryResponseDto(
-    recordings = recordings.map { it.toDto() },
+internal fun CallHistoryResult.toDto() = CallHistoryResponseDto(
+    calls = calls.map(CallHistoryItemResult::toDto),
     nextCursor = nextCursor,
+)
+
+private fun CallHistoryItemResult.toDto() = CallHistoryItemDto(
+    callId = callId,
+    startedAtEpochMillis = startedAtEpochMillis,
+    durationMillis = durationMillis,
 )

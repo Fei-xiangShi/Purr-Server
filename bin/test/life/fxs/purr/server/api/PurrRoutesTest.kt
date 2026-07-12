@@ -6,6 +6,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -100,6 +101,69 @@ class PurrRoutesTest {
         assertEquals(HttpStatusCode.OK, pairResponse.status)
         assertTrue(pairResponse.bodyAsText().contains("\"pairId\":\"pair-demo\""))
         assertTrue(pairResponse.bodyAsText().contains("\"userId\":\"user-b\""))
+    }
+
+    @Test
+    fun `password change verifies current password and revokes all sessions`() = testApplication {
+        val login = client.post("/auth/login") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"username":"user-a","password":"pass-a"}""")
+        }
+        val loginBody = login.bodyAsText()
+        val accessToken = Regex("\\\"accessToken\\\":\\\"([^\\\"]+)\\\"").find(loginBody)?.groupValues?.get(1)
+        check(!accessToken.isNullOrBlank())
+
+        val incorrect = client.put("/me/password") {
+            header(HttpHeaders.Authorization, "Bearer $accessToken")
+            contentType(ContentType.Application.Json)
+            setBody("""{"currentPassword":"wrong-password","newPassword":"new-password"}""")
+        }
+        assertEquals(HttpStatusCode.Forbidden, incorrect.status)
+        assertEquals(
+            HttpStatusCode.OK,
+            client.get("/me") { header(HttpHeaders.Authorization, "Bearer $accessToken") }.status,
+        )
+
+        val changed = client.put("/me/password") {
+            header(HttpHeaders.Authorization, "Bearer $accessToken")
+            contentType(ContentType.Application.Json)
+            setBody("""{"currentPassword":"pass-a","newPassword":"new-password"}""")
+        }
+        assertEquals(HttpStatusCode.NoContent, changed.status)
+        assertEquals(
+            HttpStatusCode.Unauthorized,
+            client.get("/me") { header(HttpHeaders.Authorization, "Bearer $accessToken") }.status,
+        )
+
+        val oldPasswordLogin = client.post("/auth/login") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"username":"user-a","password":"pass-a"}""")
+        }
+        assertEquals(HttpStatusCode.Unauthorized, oldPasswordLogin.status)
+
+        val newPasswordLogin = client.post("/auth/login") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"username":"user-a","password":"new-password"}""")
+        }
+        assertEquals(HttpStatusCode.OK, newPasswordLogin.status)
+    }
+
+    @Test
+    fun `authenticated user can update display name`() = testApplication {
+        val accessToken = client.login("user-a", "pass-a")
+
+        val updated = client.put("/me/profile") {
+            header(HttpHeaders.Authorization, "Bearer $accessToken")
+            contentType(ContentType.Application.Json)
+            setBody("""{"displayName":"  New Display Name  "}""")
+        }
+
+        assertEquals(HttpStatusCode.OK, updated.status)
+        assertTrue(updated.bodyAsText().contains("\"displayName\":\"New Display Name\""))
+        val me = client.get("/me") {
+            header(HttpHeaders.Authorization, "Bearer $accessToken")
+        }
+        assertTrue(me.bodyAsText().contains("\"displayName\":\"New Display Name\""))
     }
 
     @Test
@@ -290,6 +354,7 @@ class PurrRoutesTest {
             header("Authorization", "Bearer $userBToken")
         }
         assertEquals(HttpStatusCode.OK, afterEveryoneLeaves.status)
+        assertTrue(afterEveryoneLeaves.bodyAsText().contains("\"state\":\"ended\""))
         assertTrue(afterEveryoneLeaves.bodyAsText().contains("\"recordingStatus\":\"stopped\""))
 
         val recordings = client.get("/calls/$callId/recordings") {
@@ -315,35 +380,87 @@ class PurrRoutesTest {
         assertTrue(download.bodyAsText().contains("\"url\":\"http://localhost:9000/"))
         assertTrue(download.bodyAsText().contains("X-Amz-Signature"))
 
-        val secondStart = client.post("/calls/$callId/recording/start") {
+        val nextSessionA = client.post("/calls/session") {
             header("Authorization", "Bearer $userAToken")
+            contentType(ContentType.Application.Json)
+            setBody("""{"pairId":"pair-demo","recordingConsent":true}""")
         }
-        assertEquals(HttpStatusCode.OK, secondStart.status)
-        val secondStop = client.post("/calls/$callId/recording/stop") {
-            header("Authorization", "Bearer $userAToken")
-        }
-        assertEquals(HttpStatusCode.OK, secondStop.status)
+        assertEquals(HttpStatusCode.OK, nextSessionA.status)
+        val nextSessionBody = nextSessionA.bodyAsText()
+        val nextCallId = Regex("\\\"callId\\\":\\\"([^\\\"]+)\\\"")
+            .find(nextSessionBody)
+            ?.groupValues
+            ?.get(1)
+        val nextRoomName = Regex("\\\"roomName\\\":\\\"([^\\\"]+)\\\"")
+            .find(nextSessionBody)
+            ?.groupValues
+            ?.get(1)
+        check(!nextCallId.isNullOrBlank())
+        check(!nextRoomName.isNullOrBlank())
+        assertTrue(nextCallId != callId)
+        assertTrue(nextRoomName != roomName)
 
-        val firstPage = client.get("/recordings?limit=1") {
+        val nextSessionB = client.post("/calls/session") {
+            header("Authorization", "Bearer $userBToken")
+            contentType(ContentType.Application.Json)
+            setBody("""{"pairId":"pair-demo","recordingConsent":true}""")
+        }
+        assertEquals(HttpStatusCode.OK, nextSessionB.status)
+        assertTrue(nextSessionB.bodyAsText().contains("\"callId\":\"$nextCallId\""))
+
+        listOf(
+            Triple("a-join", 1, "user-a-$nextCallId"),
+            Triple("b-join", 2, "user-b-$nextCallId"),
+        ).forEach { (eventSuffix, participantCount, identity) ->
+            client.postLiveKitWebhook(
+                body = """
+                    {
+                      "event":"participant_joined",
+                      "id":"event-$nextCallId-$eventSuffix",
+                      "room":{"name":"$nextRoomName","numParticipants":$participantCount},
+                      "participant":{"identity":"$identity","state":"ACTIVE","kind":"STANDARD"}
+                    }
+                """.trimIndent(),
+            )
+        }
+        listOf(
+            Triple("a-left", 1, "user-a-$nextCallId"),
+            Triple("b-left", 0, "user-b-$nextCallId"),
+        ).forEach { (eventSuffix, participantCount, identity) ->
+            client.postLiveKitWebhook(
+                body = """
+                    {
+                      "event":"participant_left",
+                      "id":"event-$nextCallId-$eventSuffix",
+                      "room":{"name":"$nextRoomName","numParticipants":$participantCount},
+                      "participant":{"identity":"$identity","state":"DISCONNECTED","kind":"STANDARD"}
+                    }
+                """.trimIndent(),
+            )
+        }
+
+        val firstPage = client.get("/calls/history?limit=1") {
             header("Authorization", "Bearer $userBToken")
         }
         assertEquals(HttpStatusCode.OK, firstPage.status)
         val firstPageBody = firstPage.bodyAsText()
-        assertEquals(1, Regex("\"recordingId\"").findAll(firstPageBody).count())
-        assertTrue(!firstPageBody.contains("objectKey"))
+        assertEquals(1, Regex("\"callId\"").findAll(firstPageBody).count())
+        assertTrue(firstPageBody.contains("\"startedAtEpochMillis\":"))
+        assertTrue(firstPageBody.contains("\"durationMillis\":"))
+        assertTrue(!firstPageBody.contains("recordingId"))
         val nextCursor = Regex("\\\"nextCursor\\\":\\\"([^\\\"]+)")
             .find(firstPageBody)
             ?.groupValues
             ?.get(1)
         check(!nextCursor.isNullOrBlank())
 
-        val secondPage = client.get("/recordings?limit=1&before=$nextCursor") {
+        val secondPage = client.get("/calls/history?limit=1&before=$nextCursor") {
             header("Authorization", "Bearer $userBToken")
         }
         assertEquals(HttpStatusCode.OK, secondPage.status)
-        assertEquals(1, Regex("\"recordingId\"").findAll(secondPage.bodyAsText()).count())
+        assertEquals(1, Regex("\"callId\"").findAll(secondPage.bodyAsText()).count())
 
-        val invalidPage = client.get("/recordings?limit=51") {
+        val invalidPage = client.get("/calls/history?limit=51") {
             header("Authorization", "Bearer $userBToken")
         }
         assertEquals(HttpStatusCode.BadRequest, invalidPage.status)
@@ -485,6 +602,21 @@ class PurrRoutesTest {
 
         assertEquals(HttpStatusCode.BadRequest, response.status)
         assertTrue(response.bodyAsText().contains("Explicit recording consent is required"))
+    }
+
+    @Test
+    fun `call session rejects reconnection requests`() = testApplication {
+        val token = client.login("user-a", "pass-a")
+        val response = client.post("/calls/session") {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """{"pairId":"pair-demo","resumeCallId":"call-old","recordingConsent":true}""",
+            )
+        }
+
+        assertEquals(HttpStatusCode.BadRequest, response.status)
+        assertTrue(response.bodyAsText().contains("Call reconnection is not supported"))
     }
 
     @Test

@@ -2,7 +2,11 @@ package life.fxs.purr.server.service
 
 import life.fxs.purr.server.auth.AuthContextResolver
 import life.fxs.purr.server.application.account.AuthService
+import life.fxs.purr.server.application.account.AvatarService
+import life.fxs.purr.server.application.account.PasswordChangeService
 import life.fxs.purr.server.application.account.PairService
+import life.fxs.purr.server.application.account.ProfileService
+import life.fxs.purr.server.application.port.PasswordHasher
 import life.fxs.purr.server.application.port.PasswordVerifier
 import life.fxs.purr.server.application.port.PresenceStore
 import life.fxs.purr.server.application.port.RealtimeEventSink
@@ -34,6 +38,8 @@ import life.fxs.purr.server.realtime.OutboxRepository
 import life.fxs.purr.server.realtime.RedisRealtimeMessageBroker
 import life.fxs.purr.server.recording.S3RecordingDownloadUrlProvider
 import life.fxs.purr.server.recording.S3RecordingObjectStore
+import life.fxs.purr.server.avatar.AvatarStorageConfig
+import life.fxs.purr.server.avatar.S3AvatarObjectStore
 import life.fxs.purr.server.recording.RecordingRetentionService
 import life.fxs.purr.server.ratelimit.AuthRateLimiter
 import life.fxs.purr.server.ratelimit.AuthRateLimiterFactory
@@ -41,6 +47,7 @@ import life.fxs.purr.server.redis.RedisClientResources
 import life.fxs.purr.server.seed.BootstrapSeeder
 import life.fxs.purr.server.application.call.CallAccessPolicy
 import life.fxs.purr.server.application.call.CallSessionService
+import life.fxs.purr.server.application.call.CallHistoryQueryService
 import life.fxs.purr.server.application.call.RecordingCommandService
 import life.fxs.purr.server.application.call.RecordingQueryService
 import org.mindrot.jbcrypt.BCrypt
@@ -50,8 +57,12 @@ data class ServerDependencies(
     val authContextResolver: AuthContextResolver,
     val jwtTokenService: JwtTokenService,
     val authService: AuthService,
+    val passwordChangeService: PasswordChangeService,
+    val avatarService: AvatarService,
+    val profileService: ProfileService,
     val pairService: PairService,
     val callSessionService: CallSessionService,
+    val callHistoryQueryService: CallHistoryQueryService,
     val recordingCommandService: RecordingCommandService,
     val recordingQueryService: RecordingQueryService,
     val liveKitWebhookService: LiveKitWebhookService,
@@ -62,6 +73,7 @@ data class ServerDependencies(
     private val realtimeResource: AutoCloseable?,
     private val recordingDownloadResource: AutoCloseable,
     private val recordingObjectStoreResource: AutoCloseable,
+    private val avatarObjectStoreResource: AutoCloseable,
     private val recordingRecoveryService: RecordingRecoveryService,
     private val recordingRetentionService: RecordingRetentionService,
     private val outboxDispatcher: OutboxDispatcher,
@@ -110,6 +122,11 @@ data class ServerDependencies(
             failure?.addSuppressed(error) ?: run { failure = error }
         }
         try {
+            avatarObjectStoreResource.close()
+        } catch (error: Throwable) {
+            failure?.addSuppressed(error) ?: run { failure = error }
+        }
+        try {
             (databaseResources.dataSource as? AutoCloseable)?.close()
         } catch (error: Throwable) {
             failure?.addSuppressed(error) ?: run { failure = error }
@@ -126,6 +143,7 @@ object ServerDependenciesFactory {
         var authRateLimiterResource: AuthRateLimiter? = null
         var recordingDownloadResource: AutoCloseable? = null
         var recordingObjectStoreResource: AutoCloseable? = null
+        var avatarObjectStoreResource: AutoCloseable? = null
         var recordingRecoveryService: RecordingRecoveryService? = null
         var recordingRetentionService: RecordingRetentionService? = null
         var outboxDispatcher: OutboxDispatcher? = null
@@ -165,6 +183,19 @@ object ServerDependenciesFactory {
                 accessTokenIssuer = jwtTokenService,
                 passwordVerifier = PasswordVerifier(BCrypt::checkpw),
             )
+            val passwordChangeService = PasswordChangeService(
+                userAccountStore = userRepository,
+                authSessionStore = authSessionRepository,
+                passwordVerifier = PasswordVerifier(BCrypt::checkpw),
+                passwordHasher = PasswordHasher { password ->
+                    BCrypt.hashpw(password, BCrypt.gensalt(BCRYPT_LOG_ROUNDS))
+                },
+                transaction = applicationTransaction,
+            )
+            val profileService = ProfileService(
+                userAccountStore = userRepository,
+                transaction = applicationTransaction,
+            )
             val pairService = PairService(
                 pairStore = pairBondRepository,
                 userAccountStore = userRepository,
@@ -189,6 +220,23 @@ object ServerDependenciesFactory {
                 .also { recordingDownloadResource = it }
             val recordingObjectStore = S3RecordingObjectStore(config.recording)
                 .also { recordingObjectStoreResource = it }
+            val avatarObjectStore = S3AvatarObjectStore(
+                AvatarStorageConfig(
+                    bucket = config.recording.bucket,
+                    endpoint = config.recording.endpoint,
+                    publicEndpoint = config.recording.publicEndpoint,
+                    accessKey = config.recording.accessKey,
+                    secretKey = config.recording.secretKey,
+                    region = config.recording.region,
+                    forcePathStyle = config.recording.forcePathStyle,
+                ),
+            )
+                .also { avatarObjectStoreResource = it }
+            val avatarService = AvatarService(
+                userAccountStore = userRepository,
+                avatarObjectStore = avatarObjectStore,
+                transaction = applicationTransaction,
+            )
             val callAccessPolicy = CallAccessPolicy(
                 pairService = pairService,
                 callSessionStore = callSessionRepository,
@@ -218,9 +266,12 @@ object ServerDependenciesFactory {
             )
             val recordingQueryService = RecordingQueryService(
                 callAccessPolicy = callAccessPolicy,
-                pairService = pairService,
                 callRecordingStore = callRecordingRepository,
                 recordingDownloadProvider = recordingDownloadUrlProvider,
+            )
+            val callHistoryQueryService = CallHistoryQueryService(
+                pairService = pairService,
+                callSessionStore = callSessionRepository,
             )
             val liveKitWebhookService = LiveKitWebhookService(
                 liveKitConfig = config.liveKit,
@@ -256,8 +307,12 @@ object ServerDependenciesFactory {
                 authContextResolver = authContextResolver,
                 jwtTokenService = jwtTokenService,
                 authService = authService,
+                passwordChangeService = passwordChangeService,
+                avatarService = avatarService,
+                profileService = profileService,
                 pairService = pairService,
                 callSessionService = callSessionService,
+                callHistoryQueryService = callHistoryQueryService,
                 recordingCommandService = recordingCommandService,
                 recordingQueryService = recordingQueryService,
                 liveKitWebhookService = liveKitWebhookService,
@@ -268,6 +323,7 @@ object ServerDependenciesFactory {
                 realtimeResource = realtimeResource,
                 recordingDownloadResource = recordingDownloadUrlProvider,
                 recordingObjectStoreResource = recordingObjectStore,
+                avatarObjectStoreResource = avatarObjectStore,
                 recordingRecoveryService = recoveryService,
                 recordingRetentionService = retentionService,
                 outboxDispatcher = dispatcher,
@@ -298,6 +354,9 @@ object ServerDependenciesFactory {
             runCatching { recordingObjectStoreResource?.close() }
                 .exceptionOrNull()
                 ?.let(error::addSuppressed)
+            runCatching { avatarObjectStoreResource?.close() }
+                .exceptionOrNull()
+                ?.let(error::addSuppressed)
             runCatching { (databaseResources.dataSource as? AutoCloseable)?.close() }
                 .exceptionOrNull()
                 ?.let(error::addSuppressed)
@@ -310,3 +369,5 @@ private data class RecordingAdapters(
     val controller: RecordingController,
     val participantService: RoomParticipantService?,
 )
+
+private const val BCRYPT_LOG_ROUNDS = 12

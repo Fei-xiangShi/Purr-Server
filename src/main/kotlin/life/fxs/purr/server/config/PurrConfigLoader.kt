@@ -319,8 +319,8 @@ object PurrConfigLoader {
             require(!config.recording.enabled || config.recording.recoveryEnabled) {
                 "Enabled production recording must enable recovery"
             }
-            require(!config.recording.enabled || config.recording.publicEndpoint.startsWith("https://")) {
-                "Production recording public endpoint must use https://"
+            require(config.recording.publicEndpoint.startsWith("https://")) {
+                "Production media public endpoint must use https://"
             }
             require(!config.recording.enabled || config.recording.cleanupEnabled) {
                 "Enabled production recording must enable retention cleanup"

@@ -1,7 +1,7 @@
 package life.fxs.purr.server.application.port
 
 import life.fxs.purr.server.application.model.RecordingDownloadResult
-import life.fxs.purr.server.application.model.RecordingPageCursor
+import life.fxs.purr.server.application.model.CallHistoryCursor
 import life.fxs.purr.server.model.CallState
 import life.fxs.purr.server.model.RecordingStatus
 
@@ -41,6 +41,8 @@ interface CallSessionStore {
     fun endIfActive(callId: String, endedAtEpochMillis: Long): EndCallResolution?
 
     fun claimRecordingStart(callId: String, updatedAtEpochMillis: Long): CallRecord?
+
+    fun findEndedByPairId(pairId: String, limit: Int, cursor: CallHistoryCursor?): List<CallRecord>
 }
 
 data class RecordingRecord(
@@ -84,7 +86,6 @@ interface CallRecordingStore {
 
     fun findByRecordingId(recordingId: String): RecordingRecord?
 
-    fun findByPairId(pairId: String, limit: Int, cursor: RecordingPageCursor?): List<RecordingRecord>
 }
 
 interface RecordingConsentStore {

@@ -27,9 +27,3 @@ data class RecordingDownloadDto(
     val url: String,
     val expiresAtEpochMillis: Long,
 )
-
-@Serializable
-data class RecordingLibraryResponseDto(
-    val recordings: List<CallRecordingDto>,
-    val nextCursor: String? = null,
-)

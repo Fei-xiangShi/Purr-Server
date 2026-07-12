@@ -15,7 +15,6 @@ import org.jetbrains.exposed.sql.or
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.isNotNull
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.isNull
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
-import life.fxs.purr.server.application.model.RecordingPageCursor
 import org.jetbrains.exposed.sql.insertIgnore
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -59,33 +58,6 @@ class CallRecordingRepository : CallRecordingStore {
             .singleOrNull()
             ?.toRecordingRecord()
     }
-
-    override fun findByPairId(
-        pairId: String,
-        limit: Int,
-        cursor: RecordingPageCursor?,
-    ): List<RecordingRecord> =
-        transaction {
-            val pairCondition = CallSessionsTable.pairId eq pairId
-            val condition = cursor?.let {
-                pairCondition and (
-                    (CallRecordingsTable.createdAtEpochMillis less it.createdAtEpochMillis) or
-                        (
-                            (CallRecordingsTable.createdAtEpochMillis eq it.createdAtEpochMillis) and
-                                (CallRecordingsTable.recordingId less it.recordingId)
-                            )
-                    )
-            } ?: pairCondition
-            (CallRecordingsTable innerJoin CallSessionsTable)
-                .selectAll()
-                .where { condition }
-                .orderBy(
-                    CallRecordingsTable.createdAtEpochMillis to SortOrder.DESC,
-                    CallRecordingsTable.recordingId to SortOrder.DESC,
-                )
-                .limit(limit)
-                .map { it.toRecordingRecord() }
-        }
 
     fun findRetentionCandidates(
         updatedBeforeEpochMillis: Long,

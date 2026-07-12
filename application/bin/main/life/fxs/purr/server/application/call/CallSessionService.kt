@@ -41,24 +41,23 @@ class CallSessionService(
                 throw ApplicationException(ApplicationError.INVALID_ARGUMENT, "Explicit recording consent is required")
             }
 
-            val resolvedCall = when (val resumeCallId = command.resumeCallId) {
-                null -> callSessionStore.findOrCreateActive(command.pairId) {
-                    newCall(command.pairId, userId)
-                }.also { resolution ->
-                    if (resolution.created) {
-                        realtimeOutbox.enqueue(
-                            recipientUserId = pairService.requirePartnerUserId(userId),
-                            event = resolution.call.toRealtimeEvent(),
-                            occurredAtEpochMillis = resolution.call.startedAtEpochMillis,
-                        )
-                    }
-                }.call
-                else -> callAccessPolicy.requireAccessibleCall(userId, resumeCallId).also {
-                    if (it.state != CallState.ACTIVE) {
-                        throw ApplicationException(ApplicationError.INVALID_ARGUMENT, "Call $resumeCallId is not active")
-                    }
-                }
+            if (command.resumeCallId != null) {
+                throw ApplicationException(
+                    ApplicationError.INVALID_ARGUMENT,
+                    "Call reconnection is not supported; create a new call session",
+                )
             }
+            val resolvedCall = callSessionStore.findOrCreateActive(command.pairId) {
+                newCall(command.pairId, userId)
+            }.also { resolution ->
+                if (resolution.created) {
+                    realtimeOutbox.enqueue(
+                        recipientUserId = pairService.requirePartnerUserId(userId),
+                        event = resolution.call.toRealtimeEvent(),
+                        occurredAtEpochMillis = resolution.call.startedAtEpochMillis,
+                    )
+                }
+            }.call
             if (recordingEnabled) {
                 recordingConsentStore.record(
                     callId = resolvedCall.callId,

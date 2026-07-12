@@ -61,8 +61,8 @@ class LiveKitWebhookService(
         val call = callSessionRepository.findByRoomName(roomName) ?: return
         when (event.event) {
             PARTICIPANT_JOINED_EVENT -> maybeStartRecordingWhenReady(event, call)
-            PARTICIPANT_LEFT_EVENT -> maybeStopRecordingWhenRoomEmpty(event, call)
-            ROOM_FINISHED_EVENT -> maybeStopRecording(call)
+            PARTICIPANT_LEFT_EVENT -> maybeEndCallWhenRoomEmpty(event, call)
+            ROOM_FINISHED_EVENT -> endCall(call)
         }
     }
 
@@ -112,7 +112,7 @@ class LiveKitWebhookService(
         }
     }
 
-    private fun maybeStopRecordingWhenRoomEmpty(event: LivekitWebhook.WebhookEvent, call: CallRecord) {
+    private fun maybeEndCallWhenRoomEmpty(event: LivekitWebhook.WebhookEvent, call: CallRecord) {
         if (event.hasParticipant() && event.participant.kind == LivekitModels.ParticipantInfo.Kind.EGRESS) {
             return
         }
@@ -121,7 +121,17 @@ class LiveKitWebhookService(
         if (presentParticipantCount != 0) {
             return
         }
+        endCall(call)
+    }
+
+    private fun endCall(call: CallRecord) {
+        // A room becoming empty is the call boundary. Releasing the active slot
+        // guarantees that a later call receives a new call id and room.
         maybeStopRecording(call)
+        callSessionRepository.endIfActive(
+            callId = call.callId,
+            endedAtEpochMillis = nowProvider().toEpochMilli(),
+        )
     }
 
     private fun syncRecording(egressInfo: LivekitEgress.EgressInfo) {

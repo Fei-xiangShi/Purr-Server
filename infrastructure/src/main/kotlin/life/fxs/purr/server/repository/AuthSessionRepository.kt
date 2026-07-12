@@ -93,7 +93,7 @@ class AuthSessionRepository : AuthSessionStore {
         }
     }
 
-    fun deleteAllByUserId(userId: String) {
+    override fun deleteAllByUserId(userId: String) {
         transaction {
             AuthSessionsTable.deleteWhere { AuthSessionsTable.userId eq userId }
         }

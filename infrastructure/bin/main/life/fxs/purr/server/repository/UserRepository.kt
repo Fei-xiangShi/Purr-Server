@@ -5,6 +5,7 @@ import life.fxs.purr.server.application.port.UserAccountRecord
 import life.fxs.purr.server.application.port.UserAccountStore
 import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.insertIgnore
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -59,6 +60,30 @@ class UserRepository : UserAccountStore {
             .where { UsersTable.id eq userId }
             .singleOrNull()
             ?.toUserAccountRecord()
+    }
+
+    override fun replacePasswordHash(
+        userId: String,
+        expectedPasswordHash: String,
+        newPasswordHash: String,
+    ): Boolean = transaction {
+        UsersTable.update({
+            (UsersTable.id eq userId) and (UsersTable.passwordHash eq expectedPasswordHash)
+        }) {
+            it[UsersTable.passwordHash] = newPasswordHash
+        } == 1
+    }
+
+    override fun updateAvatarUrl(userId: String, avatarUrl: String): Boolean = transaction {
+        UsersTable.update({ UsersTable.id eq userId }) {
+            it[UsersTable.avatarUrl] = avatarUrl
+        } == 1
+    }
+
+    override fun updateDisplayName(userId: String, displayName: String): Boolean = transaction {
+        UsersTable.update({ UsersTable.id eq userId }) {
+            it[UsersTable.displayName] = displayName
+        } == 1
     }
 
     private fun ResultRow.toUserAccountRecord(): UserAccountRecord = UserAccountRecord(

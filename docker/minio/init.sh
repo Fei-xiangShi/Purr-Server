@@ -7,3 +7,4 @@ until mc alias set purr-minio http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_
 done
 
 mc mb --ignore-existing "purr-minio/$MINIO_BUCKET"
+mc anonymous set download "purr-minio/$MINIO_BUCKET/avatars"

@@ -5,8 +5,10 @@ import io.ktor.server.application.install
 import io.ktor.server.plugins.requestvalidation.RequestValidation
 import io.ktor.server.plugins.requestvalidation.ValidationResult
 import life.fxs.purr.server.model.LoginRequestDto
+import life.fxs.purr.server.model.ChangePasswordRequestDto
 import life.fxs.purr.server.model.RefreshRequestDto
 import life.fxs.purr.server.model.SessionRequestDto
+import life.fxs.purr.server.model.UpdateProfileRequestDto
 
 fun Application.configureRequestValidation() {
     install(RequestValidation) {
@@ -24,6 +26,26 @@ fun Application.configureRequestValidation() {
                 ValidationResult.Valid
             } else {
                 ValidationResult.Invalid("refreshToken has an invalid length")
+            }
+        }
+        validate<ChangePasswordRequestDto> { request ->
+            when {
+                request.currentPassword.isEmpty() || request.currentPassword.length > 1024 ->
+                    ValidationResult.Invalid("currentPassword must contain 1 to 1024 characters")
+                request.newPassword.length < 8 ->
+                    ValidationResult.Invalid("newPassword must contain at least 8 characters")
+                request.newPassword.toByteArray(Charsets.UTF_8).size > 72 ->
+                    ValidationResult.Invalid("newPassword must not exceed 72 UTF-8 bytes")
+                else -> ValidationResult.Valid
+            }
+        }
+        validate<UpdateProfileRequestDto> { request ->
+            when {
+                request.displayName.trim().isEmpty() || request.displayName.trim().length > 100 ->
+                    ValidationResult.Invalid("displayName must contain 1 to 100 characters")
+                request.displayName.any(Char::isISOControl) ->
+                    ValidationResult.Invalid("displayName must not contain control characters")
+                else -> ValidationResult.Valid
             }
         }
         validate<SessionRequestDto> { request ->
