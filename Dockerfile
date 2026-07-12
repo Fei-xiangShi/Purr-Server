@@ -12,8 +12,9 @@ COPY domain/src /workspace/domain/src
 COPY application/src /workspace/application/src
 COPY infrastructure/src /workspace/infrastructure/src
 
-RUN chmod +x /workspace/gradlew \
-    && /workspace/gradlew --no-daemon installDist
+# The Gradle base image already contains the pinned 8.10.2 distribution. Using
+# it directly avoids a second wrapper download during image builds.
+RUN gradle --no-daemon installDist
 
 FROM eclipse-temurin:17-jre@sha256:1824944ef1bd572d1ff0952afeb2fec7931d77c972c4fbc4dfcdf89f758fb490
 WORKDIR /app
