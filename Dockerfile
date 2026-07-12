@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 FROM gradle:8.10.2-jdk17@sha256:c2900027f3f0681c2cbfb09d527813851ad67aeafbb409997297efa2df20e748 AS build
 WORKDIR /workspace
 
@@ -7,6 +9,11 @@ COPY gradle /workspace/gradle
 COPY domain/build.gradle.kts /workspace/domain/build.gradle.kts
 COPY application/build.gradle.kts /workspace/application/build.gradle.kts
 COPY infrastructure/build.gradle.kts /workspace/infrastructure/build.gradle.kts
+
+# Keep dependency resolution independent from source changes so Docker can
+# reuse it until a Gradle build file or the version catalog changes.
+RUN gradle --no-daemon dependencies
+
 COPY src /workspace/src
 COPY domain/src /workspace/domain/src
 COPY application/src /workspace/application/src
@@ -14,7 +21,8 @@ COPY infrastructure/src /workspace/infrastructure/src
 
 # The Gradle base image already contains the pinned 8.10.2 distribution. Using
 # it directly avoids a second wrapper download during image builds.
-RUN gradle --no-daemon installDist
+RUN --mount=type=cache,id=purr-server-gradle-build-cache,target=/home/gradle/.gradle/caches/build-cache-1,sharing=locked \
+    gradle --no-daemon --build-cache installDist
 
 FROM eclipse-temurin:17-jre@sha256:1824944ef1bd572d1ff0952afeb2fec7931d77c972c4fbc4dfcdf89f758fb490
 WORKDIR /app
