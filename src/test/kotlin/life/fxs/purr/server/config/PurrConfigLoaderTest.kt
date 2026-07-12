@@ -111,6 +111,34 @@ class PurrConfigLoaderTest {
         assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(placeholderRecordingSecret) }
     }
 
+    @Test
+    fun `production accepts eight character user passwords`() {
+        val config = validProductionConfig().copy(
+            auth = validProductionConfig().auth.copy(
+                seedUsers = listOf(
+                    validProductionConfig().auth.seedUsers[0].copy(password = "abc12345"),
+                    validProductionConfig().auth.seedUsers[1],
+                ),
+            ),
+        )
+
+        PurrConfigLoader.validate(config)
+    }
+
+    @Test
+    fun `production rejects user passwords shorter than eight characters`() {
+        val config = validProductionConfig().copy(
+            auth = validProductionConfig().auth.copy(
+                seedUsers = listOf(
+                    validProductionConfig().auth.seedUsers[0].copy(password = "abc1234"),
+                    validProductionConfig().auth.seedUsers[1],
+                ),
+            ),
+        )
+
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(config) }
+    }
+
     private fun validProductionConfig() = PurrServerConfig(
         environment = RuntimeEnvironment.PRODUCTION,
         auth = AuthConfig(

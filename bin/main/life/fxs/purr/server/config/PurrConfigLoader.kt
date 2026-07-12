@@ -372,7 +372,7 @@ object PurrConfigLoader {
 
     private const val EXPECTED_SEED_USER_COUNT = 2
     private const val MAX_DISPLAY_NAME_LENGTH = 100
-    private const val MIN_PRODUCTION_PASSWORD_LENGTH = 12
+    private const val MIN_PRODUCTION_PASSWORD_LENGTH = 8
     private const val MIN_PRODUCTION_SECRET_LENGTH = 16
     private val IDENTIFIER_PATTERN = Regex("[A-Za-z0-9._-]{1,64}")
     private val USERNAME_PATTERN = Regex("[A-Za-z0-9._@+-]{1,128}")
