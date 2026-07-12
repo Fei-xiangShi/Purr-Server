@@ -1,67 +1,109 @@
+import org.gradle.api.tasks.testing.Test
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension
 
 plugins {
-    kotlin("jvm") version "2.0.21"
-    kotlin("plugin.serialization") version "2.0.21"
+    alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.kotlin.serialization)
     application
 }
 
-group = "life.fxs.purr"
-version = "0.1.0"
+allprojects {
+    group = "life.fxs.purr"
+    version = "0.1.0"
 
-val ktorVersion = "2.3.12"
-val logbackVersion = "1.5.16"
-val javaJwtVersion = "4.4.0"
-val hikariVersion = "5.1.0"
-val flywayVersion = "10.17.3"
-val postgresqlVersion = "42.7.4"
-val h2Version = "2.3.232"
-val exposedVersion = "0.53.0"
-val bcryptVersion = "0.4"
-val liveKitServerVersion = "0.10.0"
+    plugins.withId("org.jetbrains.kotlin.jvm") {
+        extensions.configure<KotlinJvmProjectExtension> {
+            jvmToolchain(17)
+            compilerOptions {
+                jvmTarget.set(JvmTarget.JVM_17)
+            }
+        }
+    }
+
+    tasks.withType<Test>().configureEach {
+        useJUnitPlatform()
+    }
+}
 
 application {
     mainClass.set("life.fxs.purr.server.ApplicationKt")
 }
 
-repositories {
-    mavenCentral()
-}
-
 dependencies {
-    implementation("io.ktor:ktor-server-core-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-netty-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-call-logging-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-content-negotiation-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-status-pages-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-config-yaml-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-auth-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-server-auth-jwt-jvm:$ktorVersion")
-    implementation("io.ktor:ktor-serialization-kotlinx-json-jvm:$ktorVersion")
-    implementation("ch.qos.logback:logback-classic:$logbackVersion")
-    implementation("com.auth0:java-jwt:$javaJwtVersion")
-    implementation("com.zaxxer:HikariCP:$hikariVersion")
-    implementation("org.flywaydb:flyway-core:$flywayVersion")
-    implementation("org.flywaydb:flyway-database-postgresql:$flywayVersion")
-    implementation("org.jetbrains.exposed:exposed-core:$exposedVersion")
-    implementation("org.jetbrains.exposed:exposed-jdbc:$exposedVersion")
-    implementation("org.mindrot:jbcrypt:$bcryptVersion")
-    implementation("io.livekit:livekit-server:$liveKitServerVersion")
+    implementation(project(":application"))
+    implementation(project(":infrastructure"))
 
-    runtimeOnly("org.postgresql:postgresql:$postgresqlVersion")
-    runtimeOnly("com.h2database:h2:$h2Version")
+    implementation(libs.ktor.server.core)
+    implementation(libs.ktor.server.netty)
+    implementation(libs.ktor.server.call.logging)
+    implementation(libs.ktor.server.call.id)
+    implementation(libs.ktor.server.content.negotiation)
+    implementation(libs.ktor.server.status.pages)
+    implementation(libs.ktor.server.request.validation)
+    implementation(libs.ktor.server.rate.limit)
+    implementation(libs.ktor.server.forwarded.header)
+    implementation(libs.ktor.server.metrics.micrometer)
+    implementation(libs.ktor.server.websockets)
+    implementation(libs.ktor.server.config.yaml)
+    implementation(libs.ktor.server.auth)
+    implementation(libs.ktor.server.auth.jwt)
+    implementation(libs.ktor.serialization.json)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.logback.classic)
+    implementation(libs.bcrypt)
+    implementation(libs.lettuce)
+    implementation(libs.micrometer.prometheus)
 
-    testImplementation("io.ktor:ktor-server-test-host-jvm:$ktorVersion")
+    testImplementation(libs.ktor.server.test.host)
+    testImplementation(libs.ktor.client.websockets)
     testImplementation(kotlin("test"))
 }
 
-kotlin {
-    jvmToolchain(17)
-    compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_17)
+val verifyArchitecture by tasks.registering {
+    group = "verification"
+    description = "Verifies dependency rules for domain and application modules."
+    val protectedSources = files(
+        project(":domain").layout.projectDirectory.dir("src/main/kotlin"),
+        project(":application").layout.projectDirectory.dir("src/main/kotlin"),
+    )
+    inputs.files(protectedSources)
+    doLast {
+        val forbiddenImports = listOf(
+            "io.ktor",
+            "org.jetbrains.exposed",
+            "io.livekit",
+            "io.lettuce",
+            "software.amazon.awssdk",
+            "kotlinx.serialization",
+            "life.fxs.purr.server.api",
+            "life.fxs.purr.server.auth",
+            "life.fxs.purr.server.config",
+            "life.fxs.purr.server.db",
+            "life.fxs.purr.server.livekit",
+            "life.fxs.purr.server.realtime",
+            "life.fxs.purr.server.recording",
+            "life.fxs.purr.server.redis",
+            "life.fxs.purr.server.repository",
+            "life.fxs.purr.server.service",
+        )
+        val violations = protectedSources.asFileTree
+            .matching { include("**/*.kt") }
+            .files
+            .flatMap { file ->
+                file.readLines().mapIndexedNotNull { index, line ->
+                    val imported = line.removePrefix("import ").takeIf { line.startsWith("import ") }
+                    imported
+                        ?.takeIf { candidate -> forbiddenImports.any(candidate::startsWith) }
+                        ?.let { "${file.relativeTo(rootDir)}:${index + 1}: $line" }
+                }
+            }
+        check(violations.isEmpty()) {
+            "Architecture boundary violations:\n${violations.joinToString("\n")}"
+        }
     }
 }
 
-tasks.test {
-    useJUnitPlatform()
+tasks.named("check") {
+    dependsOn(verifyArchitecture)
 }

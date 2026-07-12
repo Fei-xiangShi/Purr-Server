@@ -1,0 +1,44 @@
+{
+	admin off
+	email {$ACME_EMAIL}
+}
+
+{$PURR_API_DOMAIN} {
+	encode zstd gzip
+
+	@internal_metrics path /metrics
+	respond @internal_metrics 404
+
+	reverse_proxy purr-server:8080 {
+		health_uri /health/ready
+		health_interval 10s
+		health_timeout 3s
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}
+
+{$PURR_LIVEKIT_DOMAIN} {
+	reverse_proxy livekit:7880
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+}
+
+{$PURR_STORAGE_DOMAIN} {
+	reverse_proxy minio:9000
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+}

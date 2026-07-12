@@ -6,11 +6,13 @@ ktor:
       - life.fxs.purr.server.ApplicationKt.module
 
 purr:
+  environment: development
   auth:
     accessTokenTtlSeconds: 3600
+    refreshTokenTtlSeconds: 2592000
     issuer: purr-server
     audience: purr-mobile
-    jwtSecret: dev-jwt-secret-change-me
+    jwtSecret: dev-jwt-secret-change-me-at-least-32-bytes
     seedUsers:
       userA:
         userId: user-a
@@ -37,15 +39,46 @@ purr:
     tokenTtlSeconds: 3600
   recording:
     enabled: true
-    provider: stub
+    provider: in_memory
     idPrefix: rec
     filePrefix: recordings
     bucket: purr-recordings
     endpoint: "http://localhost:9000"
+    publicEndpoint: "http://localhost:9000"
     accessKey: minioadmin
     secretKey: minioadmin
     region: us-east-1
     forcePathStyle: true
+    recoveryEnabled: false
+    recoveryIntervalSeconds: 30
+    recoveryStaleAfterSeconds: 90
+    recoveryMaxAttempts: 5
+    downloadUrlTtlSeconds: 300
+    consentPolicyVersion: "2026-01"
+    cleanupEnabled: false
+    retentionDays: 30
+    cleanupIntervalSeconds: 3600
+    cleanupBatchSize: 100
+    cleanupMaxAttempts: 10
+  realtime:
+    provider: local
+    redisUri: "redis://localhost:6379"
+    redisPassword: ""
+    channel: "purr:realtime"
+  outbox:
+    pollIntervalMillis: 100
+    batchSize: 100
+    leaseSeconds: 30
+    maxAttempts: 10
+    retryBaseSeconds: 1
+    retryMaxSeconds: 300
+  rateLimit:
+    provider: local
+    limit: 10
+    refillPeriodSeconds: 60
+    redisUri: "redis://localhost:6379"
+    redisPassword: ""
+    keyPrefix: "purr:rate-limit:auth"
   database:
     jdbcUrl: "jdbc:h2:mem:purr;MODE=PostgreSQL;DB_CLOSE_DELAY=-1"
     driverClassName: org.h2.Driver
