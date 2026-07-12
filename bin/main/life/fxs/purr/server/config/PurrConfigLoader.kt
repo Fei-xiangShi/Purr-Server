@@ -198,6 +198,29 @@ object PurrConfigLoader {
     }
 
     internal fun validate(config: PurrServerConfig) {
+        require(config.auth.seedUsers.size == EXPECTED_SEED_USER_COUNT) {
+            "Exactly two seed users are required"
+        }
+        require(config.auth.seedUsers.map { it.userId }.toSet().size == config.auth.seedUsers.size) {
+            "Seed user IDs must be unique"
+        }
+        require(config.auth.seedUsers.map { it.username }.toSet().size == config.auth.seedUsers.size) {
+            "Seed usernames must be unique"
+        }
+        config.auth.seedUsers.forEach { user ->
+            require(user.userId.matches(IDENTIFIER_PATTERN)) { "Invalid seed user ID: ${user.userId}" }
+            require(user.username.matches(USERNAME_PATTERN)) { "Invalid seed username: ${user.username}" }
+            require(user.displayName.isNotBlank() && user.displayName.length <= MAX_DISPLAY_NAME_LENGTH) {
+                "Seed user display name must contain between 1 and $MAX_DISPLAY_NAME_LENGTH characters"
+            }
+        }
+        require(config.pair.pairId.matches(IDENTIFIER_PATTERN)) { "Invalid pair ID" }
+        require(config.pair.userAId != config.pair.userBId) { "Pair users must be different" }
+        require(
+            setOf(config.pair.userAId, config.pair.userBId) == config.auth.seedUsers.map { it.userId }.toSet(),
+        ) {
+            "Pair users must match the configured seed users"
+        }
         require(config.auth.accessTokenTtlSeconds in 60..3600) {
             "Access token TTL must be between 60 and 3600 seconds"
         }
@@ -281,8 +304,8 @@ object PurrConfigLoader {
         }
 
         if (config.environment == RuntimeEnvironment.PRODUCTION) {
-            require(!config.auth.jwtSecret.startsWith("dev-")) {
-                "Development JWT secret is forbidden in production"
+            require(!config.auth.jwtSecret.isPlaceholderSecret()) {
+                "Development or placeholder JWT secret is forbidden in production"
             }
             require(config.liveKit.wsUrl.startsWith("wss://")) {
                 "LiveKit WebSocket URL must use wss:// in production"
@@ -314,6 +337,43 @@ object PurrConfigLoader {
             require(config.rateLimit.redisPassword.length >= 16) {
                 "Production rate limit Redis password must contain at least 16 characters"
             }
+            require(config.database.password.length >= MIN_PRODUCTION_SECRET_LENGTH) {
+                "Production database password must contain at least $MIN_PRODUCTION_SECRET_LENGTH characters"
+            }
+            require(config.liveKit.apiSecret.length >= MIN_PRODUCTION_SECRET_LENGTH) {
+                "Production LiveKit API secret must contain at least $MIN_PRODUCTION_SECRET_LENGTH characters"
+            }
+            require(!config.liveKit.apiSecret.isPlaceholderSecret()) {
+                "Placeholder LiveKit API secret is forbidden in production"
+            }
+            config.auth.seedUsers.forEach { user ->
+                require(user.password.length >= MIN_PRODUCTION_PASSWORD_LENGTH) {
+                    "Production seed user password must contain at least $MIN_PRODUCTION_PASSWORD_LENGTH characters"
+                }
+                require(user.password != user.username && !user.password.isPlaceholderSecret()) {
+                    "Weak or placeholder seed user password is forbidden in production"
+                }
+            }
+            if (config.recording.enabled) {
+                require(config.recording.secretKey.length >= MIN_PRODUCTION_SECRET_LENGTH) {
+                    "Production recording secret key must contain at least $MIN_PRODUCTION_SECRET_LENGTH characters"
+                }
+                require(!config.recording.secretKey.isPlaceholderSecret()) {
+                    "Placeholder recording secret key is forbidden in production"
+                }
+            }
         }
     }
+
+    private fun String.isPlaceholderSecret(): Boolean {
+        val normalized = lowercase()
+        return normalized.startsWith("change-me") || normalized.startsWith("dev-") || normalized == "minioadmin"
+    }
+
+    private const val EXPECTED_SEED_USER_COUNT = 2
+    private const val MAX_DISPLAY_NAME_LENGTH = 100
+    private const val MIN_PRODUCTION_PASSWORD_LENGTH = 12
+    private const val MIN_PRODUCTION_SECRET_LENGTH = 16
+    private val IDENTIFIER_PATTERN = Regex("[A-Za-z0-9._-]{1,64}")
+    private val USERNAME_PATTERN = Regex("[A-Za-z0-9._@+-]{1,128}")
 }
