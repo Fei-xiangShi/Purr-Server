@@ -10,7 +10,7 @@ plugins {
 
 allprojects {
     group = "life.fxs.purr"
-    version = "0.1.0"
+    version = providers.gradleProperty("PURR_SERVER_VERSION").orElse("0.1.2").get()
 
     plugins.withId("org.jetbrains.kotlin.jvm") {
         extensions.configure<KotlinJvmProjectExtension> {

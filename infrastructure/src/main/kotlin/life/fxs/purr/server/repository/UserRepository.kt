@@ -8,6 +8,7 @@ import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.insertIgnore
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.jetbrains.exposed.sql.update
 import org.mindrot.jbcrypt.BCrypt
 
 class UserRepository : UserAccountStore {
@@ -19,12 +20,29 @@ class UserRepository : UserAccountStore {
         avatarUrl: String?,
     ) {
         transaction {
-            UsersTable.insertIgnore {
-                it[UsersTable.id] = id
-                it[UsersTable.username] = username
-                it[passwordHash] = BCrypt.hashpw(password, BCrypt.gensalt())
-                it[UsersTable.displayName] = displayName
-                it[UsersTable.avatarUrl] = avatarUrl
+            val existingPasswordHash = UsersTable.selectAll()
+                .where { UsersTable.id eq id }
+                .singleOrNull()
+                ?.get(UsersTable.passwordHash)
+            val passwordHash = existingPasswordHash
+                ?.takeIf { BCrypt.checkpw(password, it) }
+                ?: BCrypt.hashpw(password, BCrypt.gensalt())
+
+            if (existingPasswordHash == null) {
+                UsersTable.insertIgnore {
+                    it[UsersTable.id] = id
+                    it[UsersTable.username] = username
+                    it[UsersTable.passwordHash] = passwordHash
+                    it[UsersTable.displayName] = displayName
+                    it[UsersTable.avatarUrl] = avatarUrl
+                }
+            } else {
+                UsersTable.update({ UsersTable.id eq id }) {
+                    it[UsersTable.username] = username
+                    it[UsersTable.passwordHash] = passwordHash
+                    it[UsersTable.displayName] = displayName
+                    it[UsersTable.avatarUrl] = avatarUrl
+                }
             }
         }
     }

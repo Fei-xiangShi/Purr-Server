@@ -72,6 +72,45 @@ class PurrConfigLoaderTest {
         assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(config) }
     }
 
+    @Test
+    fun `pair users must match unique seed users`() {
+        val duplicateUsers = validProductionConfig().copy(
+            auth = validProductionConfig().auth.copy(
+                seedUsers = listOf(
+                    SeedUserConfig("user-a", "user-a", "strong-password-a", "A", null),
+                    SeedUserConfig("user-a", "user-b", "strong-password-b", "B", null),
+                ),
+            ),
+        )
+        val mismatchedPair = validProductionConfig().copy(
+            pair = validProductionConfig().pair.copy(userBId = "user-c"),
+        )
+
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(duplicateUsers) }
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(mismatchedPair) }
+    }
+
+    @Test
+    fun `production rejects weak account and infrastructure secrets`() {
+        val weakUserPassword = validProductionConfig().copy(
+            auth = validProductionConfig().auth.copy(
+                seedUsers = validProductionConfig().auth.seedUsers.mapIndexed { index, user ->
+                    if (index == 0) user.copy(password = user.username) else user
+                },
+            ),
+        )
+        val weakDatabasePassword = validProductionConfig().copy(
+            database = validProductionConfig().database.copy(password = "short"),
+        )
+        val placeholderRecordingSecret = validProductionConfig().copy(
+            recording = validProductionConfig().recording.copy(secretKey = "change-me-recording-key"),
+        )
+
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(weakUserPassword) }
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(weakDatabasePassword) }
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(placeholderRecordingSecret) }
+    }
+
     private fun validProductionConfig() = PurrServerConfig(
         environment = RuntimeEnvironment.PRODUCTION,
         auth = AuthConfig(
@@ -81,15 +120,15 @@ class PurrConfigLoaderTest {
             audience = "purr-mobile",
             jwtSecret = "a-production-jwt-secret-with-32-bytes",
             seedUsers = listOf(
-                SeedUserConfig("user-a", "user-a", "password-a", "A", null),
-                SeedUserConfig("user-b", "user-b", "password-b", "B", null),
+                SeedUserConfig("user-a", "user-a", "strong-password-a", "A", null),
+                SeedUserConfig("user-b", "user-b", "strong-password-b", "B", null),
             ),
         ),
         pair = PairConfig("pair-1", 1L, "user-a", "user-b"),
         liveKit = LiveKitConfig(
             wsUrl = "wss://call.example.com",
             apiKey = "key",
-            apiSecret = "secret",
+            apiSecret = "a-strong-livekit-secret",
             tokenTtlSeconds = 900,
             httpUrl = "http://livekit:7880",
         ),
@@ -102,7 +141,7 @@ class PurrConfigLoaderTest {
             endpoint = "http://minio:9000",
             publicEndpoint = "https://storage.example.com",
             accessKey = "key",
-            secretKey = "secret",
+            secretKey = "a-strong-recording-secret",
             region = "us-east-1",
             forcePathStyle = true,
             recoveryEnabled = true,

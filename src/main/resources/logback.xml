@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%date{ISO8601} %-5level [%X{callId:-}] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="Exposed" level="WARN" />
+    <logger name="org.jetbrains.exposed" level="WARN" />
+    <logger name="com.zaxxer.hikari" level="WARN" />
+    <logger name="org.flywaydb" level="INFO" />
+    <logger name="software.amazon.awssdk" level="WARN" />
+    <logger name="io.lettuce" level="WARN" />
+
+    <root level="${PURR_LOG_LEVEL:-INFO}">
+        <appender-ref ref="STDOUT" />
+    </root>
+</configuration>
