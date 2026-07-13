@@ -48,7 +48,7 @@ class OutboxDispatcher(
         }
     }
 
-    internal fun dispatchOnce(now: Instant = nowProvider()): OutboxDispatchSummary {
+    internal suspend fun dispatchOnce(now: Instant = nowProvider()): OutboxDispatchSummary {
         val nowEpochMillis = now.toEpochMilli()
         val leaseUntilEpochMillis = now.plusSeconds(config.leaseSeconds).toEpochMilli()
         if (!repository.acquireDispatcherLease(workerId, nowEpochMillis, leaseUntilEpochMillis)) {
@@ -61,7 +61,7 @@ class OutboxDispatcher(
         }
     }
 
-    private fun dispatchClaimedBatch(
+    private suspend fun dispatchClaimedBatch(
         now: Instant,
         nowEpochMillis: Long,
         leaseUntilEpochMillis: Long,
@@ -83,28 +83,31 @@ class OutboxDispatcher(
                     leaseUntilEpochMillis = nowProvider().plusSeconds(config.leaseSeconds).toEpochMilli(),
                 ),
             ) { "Lost realtime outbox dispatcher lease" }
-            runCatching { eventSink.publishToUser(record.recipientUserId, record.event) }
-                .onSuccess {
-                    check(repository.markPublished(record.eventId, workerId, nowEpochMillis)) {
-                        "Lost outbox lease before marking event ${record.eventId} as published"
-                    }
-                    published++
+            try {
+                eventSink.publishToUser(record.recipientUserId, record.event)
+                check(repository.markPublished(record.eventId, workerId, nowEpochMillis)) {
+                    "Lost outbox lease before marking event ${record.eventId} as published"
                 }
-                .onFailure { error ->
-                    val retryDelaySeconds = retryDelaySeconds(record.attemptCount)
-                    repository.markFailed(
-                        eventId = record.eventId,
-                        workerId = workerId,
-                        availableAtEpochMillis = now.plusSeconds(retryDelaySeconds).toEpochMilli(),
-                        errorMessage = error.message ?: error::class.simpleName ?: "Realtime publication failed",
-                    )
-                    failed++
-                    if (record.attemptCount >= config.maxAttempts) {
-                        logger.error("Realtime outbox event {} exhausted retries", record.eventId, error)
-                    } else {
-                        logger.warn("Realtime outbox event {} publication failed", record.eventId, error)
-                    }
+                published++
+            } catch (error: CancellationException) {
+                // Preserve structured cancellation. The record lease will
+                // expire and another dispatch pass can safely reclaim it.
+                throw error
+            } catch (error: Throwable) {
+                val retryDelaySeconds = retryDelaySeconds(record.attemptCount)
+                repository.markFailed(
+                    eventId = record.eventId,
+                    workerId = workerId,
+                    availableAtEpochMillis = now.plusSeconds(retryDelaySeconds).toEpochMilli(),
+                    errorMessage = error.message ?: error::class.simpleName ?: "Realtime publication failed",
+                )
+                failed++
+                if (record.attemptCount >= config.maxAttempts) {
+                    logger.error("Realtime outbox event {} exhausted retries", record.eventId, error)
+                } else {
+                    logger.warn("Realtime outbox event {} publication failed", record.eventId, error)
                 }
+            }
         }
         return OutboxDispatchSummary(records.size, published, failed)
     }

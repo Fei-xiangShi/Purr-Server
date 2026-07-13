@@ -181,7 +181,12 @@ data class RealtimeEvent(
 }
 
 fun interface RealtimeEventSink {
-    fun publishToUser(userId: String, event: RealtimeEvent)
+    /**
+     * Publishes an event and returns only after the downstream transport has
+     * accepted it. Implementations must suspend, rather than block the caller,
+     * while waiting for remote I/O.
+     */
+    suspend fun publishToUser(userId: String, event: RealtimeEvent)
 
     fun isReady(): Boolean = true
 }

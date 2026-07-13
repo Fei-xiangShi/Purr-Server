@@ -17,7 +17,6 @@ import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import io.ktor.server.plugins.ratelimit.rateLimit
 import io.ktor.http.content.forEachPart
-import io.ktor.utils.io.core.readAvailable
 import kotlinx.serialization.Serializable
 import life.fxs.purr.server.auth.AuthenticatedUser
 import life.fxs.purr.server.model.LoginRequestDto
@@ -112,20 +111,23 @@ fun Route.registerPurrRoutes(
                 var contentType: String? = null
                 var bytes: ByteArray? = null
                 call.receiveMultipart().forEachPart { part ->
-                    if (part is io.ktor.http.content.PartData.FileItem) {
-                        if (part.name != "avatar") {
-                            part.dispose()
-                            throw ApiException(HttpStatusCode.BadRequest, "Avatar file field is required")
+                    try {
+                        if (part is io.ktor.http.content.PartData.FileItem) {
+                            if (part.name != "avatar") {
+                                throw ApiException(HttpStatusCode.BadRequest, "Avatar file field is required")
+                            }
+                            fileCount++
+                            if (fileCount > 1) {
+                                throw ApiException(HttpStatusCode.BadRequest, "Only one avatar file is allowed")
+                            }
+                            contentType = part.contentType?.withoutParameters()?.toString()
+                            bytes = part.provider().use { input ->
+                                onBlockingIo { input.readAtMost(MAX_AVATAR_BYTES + 1) }
+                            }
                         }
-                        fileCount++
-                        if (fileCount > 1) {
-                            part.dispose()
-                            throw ApiException(HttpStatusCode.BadRequest, "Only one avatar file is allowed")
-                        }
-                        contentType = part.contentType?.withoutParameters()?.toString()
-                        bytes = part.provider().use { input -> readAtMost(input, MAX_AVATAR_BYTES + 1) }
+                    } finally {
+                        part.dispose()
                     }
-                    part.dispose()
                 }
                 val user = call.requireAuthenticatedUser()
                 val uploadBytes = bytes ?: throw ApiException(HttpStatusCode.BadRequest, "Avatar file is required")
@@ -287,17 +289,3 @@ private const val MAX_AVATAR_BYTES = 10 * 1024 * 1024
 private const val DEFAULT_CALL_HISTORY_PAGE_SIZE = 20
 private const val MAX_CALL_HISTORY_PAGE_SIZE = 50
 private val PrometheusContentType = ContentType.parse("text/plain; version=0.0.4; charset=utf-8")
-
-private fun readAtMost(input: io.ktor.utils.io.core.Input, maxBytes: Int): ByteArray {
-    val output = java.io.ByteArrayOutputStream(minOf(maxBytes, 8 * 1024))
-    val buffer = ByteArray(8 * 1024)
-    var total = 0
-    while (total < maxBytes) {
-        val read = input.readAvailable(buffer, 0, minOf(buffer.size, maxBytes - total))
-        if (read < 0) break
-        if (read == 0) continue
-        output.write(buffer, 0, read)
-        total += read
-    }
-    return output.toByteArray()
-}

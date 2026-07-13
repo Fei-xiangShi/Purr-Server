@@ -192,6 +192,14 @@ object ServerDependenciesFactory {
                 RealtimeProvider.REDIS -> BrokeredRealtimeEventPublisher(
                     broker = RedisRealtimeMessageBroker(config.realtime, redisResources),
                     localPublisher = realtimeHub,
+                    onInboundOverflow = {
+                        realtimeHub.closeAll(
+                            io.ktor.websocket.CloseReason(
+                                io.ktor.websocket.CloseReason.Codes.TRY_AGAIN_LATER,
+                                "Realtime resynchronization required",
+                            ),
+                        )
+                    },
                 ).also { realtimeResource = it }
             }
             val authRateLimiter = AuthRateLimiterFactory.create(config.rateLimit, redisResources)

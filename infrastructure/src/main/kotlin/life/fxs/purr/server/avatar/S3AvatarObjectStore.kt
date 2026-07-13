@@ -1,11 +1,13 @@
 package life.fxs.purr.server.avatar
 
 import java.net.URI
+import java.time.Duration
 import java.util.UUID
 import life.fxs.purr.server.application.port.AvatarObjectStore
 import life.fxs.purr.server.application.port.StoredAvatar
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
+import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import software.amazon.awssdk.core.sync.RequestBody
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3Client
@@ -24,6 +26,12 @@ class S3AvatarObjectStore(
         )
         .serviceConfiguration(
             S3Configuration.builder().pathStyleAccessEnabled(config.forcePathStyle).build(),
+        )
+        .overrideConfiguration(
+            ClientOverrideConfiguration.builder()
+                .apiCallAttemptTimeout(API_CALL_ATTEMPT_TIMEOUT)
+                .apiCallTimeout(API_CALL_TIMEOUT)
+                .build(),
         )
         .build()
 
@@ -74,6 +82,11 @@ class S3AvatarObjectStore(
                 null,
             ).toString()
         }
+    }
+
+    private companion object {
+        val API_CALL_ATTEMPT_TIMEOUT: Duration = Duration.ofSeconds(5)
+        val API_CALL_TIMEOUT: Duration = Duration.ofSeconds(15)
     }
 }
 

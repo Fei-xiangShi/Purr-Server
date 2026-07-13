@@ -4,6 +4,7 @@ import io.lettuce.core.ClientOptions
 import io.lettuce.core.RedisClient
 import io.lettuce.core.RedisURI
 import io.lettuce.core.SocketOptions
+import io.lettuce.core.TimeoutOptions
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -34,7 +35,7 @@ class RedisClientResources : AutoCloseable {
             if (endpoint.password.isNotEmpty()) {
                 withPassword(endpoint.password.toCharArray())
             }
-            withTimeout(COMMAND_TIMEOUT)
+            withTimeout(REDIS_COMMAND_TIMEOUT)
             build()
         }
         return RedisClient.create(redisUri).also { client ->
@@ -48,6 +49,9 @@ class RedisClientResources : AutoCloseable {
                             .keepAlive(true)
                             .build(),
                     )
+                    // RedisURI timeouts govern blocking commands. TimeoutOptions
+                    // also enforces the same deadline for asynchronous commands.
+                    .timeoutOptions(TimeoutOptions.enabled(REDIS_COMMAND_TIMEOUT))
                     .build(),
             )
         }
@@ -60,8 +64,9 @@ class RedisClientResources : AutoCloseable {
 
     private companion object {
         val CONNECT_TIMEOUT: Duration = Duration.ofSeconds(5)
-        val COMMAND_TIMEOUT: Duration = Duration.ofSeconds(3)
         val SHUTDOWN_QUIET_PERIOD: Duration = Duration.ZERO
         val SHUTDOWN_TIMEOUT: Duration = Duration.ofSeconds(5)
     }
 }
+
+internal val REDIS_COMMAND_TIMEOUT: Duration = Duration.ofSeconds(3)

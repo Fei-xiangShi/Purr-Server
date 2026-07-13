@@ -8,6 +8,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.application.port.RealtimeEvent
 import life.fxs.purr.server.application.port.RealtimeEventSink
@@ -81,7 +83,7 @@ class OutboxDispatcherTest {
             workerId = "worker-a",
         )
 
-        val summary = dispatcher.dispatchOnce(NOW)
+        val summary = runBlocking { dispatcher.dispatchOnce(NOW) }
 
         assertEquals(OutboxDispatchSummary(1, 1, 0), summary)
         assertEquals(listOf(callStartedEvent()), delivered)
@@ -105,13 +107,37 @@ class OutboxDispatcherTest {
             workerId = "worker-a",
         )
 
-        assertEquals(1, dispatcher.dispatchOnce(NOW).failed)
+        assertEquals(1, runBlocking { dispatcher.dispatchOnce(NOW) }.failed)
         val failed = assertNotNull(outbox.find(EVENT_ID))
         assertEquals(1, failed.attemptCount)
         assertEquals(NOW.plusSeconds(1).toEpochMilli(), failed.availableAtEpochMillis)
-        assertEquals(0, dispatcher.dispatchOnce(NOW.plusMillis(999)).claimed)
-        assertEquals(1, dispatcher.dispatchOnce(NOW.plusSeconds(1)).published)
+        assertEquals(0, runBlocking { dispatcher.dispatchOnce(NOW.plusMillis(999)) }.claimed)
+        assertEquals(1, runBlocking { dispatcher.dispatchOnce(NOW.plusSeconds(1)) }.published)
         assertEquals(2, attempts)
+        dispatcher.close()
+    }
+
+    @Test
+    fun `publication cancellation is propagated without recording a transport failure`() = withDatabase {
+        seedPair()
+        val outbox = OutboxRepository(eventIdProvider = { EVENT_ID })
+        outbox.enqueue("user-b", callStartedEvent(), NOW.toEpochMilli())
+        val dispatcher = OutboxDispatcher(
+            config = outboxConfig(),
+            repository = outbox,
+            eventSink = RealtimeEventSink { _, _ -> throw CancellationException("worker stopping") },
+            workerId = "worker-a",
+        )
+
+        assertFailsWith<CancellationException> {
+            runBlocking { dispatcher.dispatchOnce(NOW) }
+        }
+
+        val record = assertNotNull(outbox.find(EVENT_ID))
+        assertEquals(1, record.attemptCount)
+        assertEquals(NOW.toEpochMilli(), record.availableAtEpochMillis)
+        assertNull(record.publishedAtEpochMillis)
+        assertNull(record.lastError)
         dispatcher.close()
     }
 

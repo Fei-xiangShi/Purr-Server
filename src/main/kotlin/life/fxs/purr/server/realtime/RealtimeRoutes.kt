@@ -9,14 +9,20 @@ import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import java.time.Instant
 import java.util.UUID
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import life.fxs.purr.server.api.ApiException
 import life.fxs.purr.server.application.port.RealtimeEvent
 import life.fxs.purr.server.auth.AuthenticatedUser
 import life.fxs.purr.server.coroutines.onBlockingIo
 import life.fxs.purr.server.service.ServerDependencies
+import org.slf4j.LoggerFactory
 
 fun Route.registerRealtimeRoutes(dependencies: ServerDependencies) {
     authenticate("auth-jwt") {
@@ -29,20 +35,23 @@ fun Route.registerRealtimeRoutes(dependencies: ServerDependencies) {
             onBlockingIo {
                 dependencies.presenceStore.connect(connectionId, user.userId, Instant.now().toEpochMilli())
             }
-            dependencies.realtimeHub.register(user.userId, connectionId, this)
-            publishPresence(dependencies, partnerId, online = true)
-            publishSnapshot(dependencies, user.userId, partnerId)
+            var registered = false
+            var heartbeatJob: Job? = null
+            try {
+                dependencies.realtimeHub.register(user.userId, connectionId, this)
+                registered = true
+                publishPresence(dependencies, partnerId, online = true)
+                publishSnapshot(dependencies, user.userId, partnerId)
 
-            val heartbeatJob = launch {
-                while (isActive) {
-                    delay(HEARTBEAT_INTERVAL_MILLIS)
-                    onBlockingIo {
-                        dependencies.presenceStore.heartbeat(connectionId, Instant.now().toEpochMilli())
+                heartbeatJob = launch {
+                    while (isActive) {
+                        delay(HEARTBEAT_INTERVAL_MILLIS)
+                        onBlockingIo {
+                            dependencies.presenceStore.heartbeat(connectionId, Instant.now().toEpochMilli())
+                        }
                     }
                 }
-            }
 
-            try {
                 for (frame in incoming) {
                     if (frame is Frame.Text && frame.readText() == HEARTBEAT_MESSAGE) {
                         onBlockingIo {
@@ -51,13 +60,34 @@ fun Route.registerRealtimeRoutes(dependencies: ServerDependencies) {
                     }
                 }
             } finally {
-                heartbeatJob.cancel()
-                dependencies.realtimeHub.unregister(user.userId, connectionId)
-                val stillOnline = onBlockingIo {
-                    dependencies.presenceStore.disconnect(connectionId)
-                    dependencies.presenceStore.isOnline(user.userId, Instant.now().toEpochMilli())
+                withContext(NonCancellable) {
+                    heartbeatJob?.cancel()
+                    val heartbeatStopped = withTimeoutOrNull(HEARTBEAT_STOP_TIMEOUT_MILLIS) {
+                        heartbeatJob?.join()
+                        true
+                    } ?: false
+                    if (!heartbeatStopped) {
+                        realtimeRoutesLogger.warn(
+                            "Timed out waiting for realtime heartbeat to stop for user {}",
+                            user.userId,
+                        )
+                    }
+                    if (registered) {
+                        dependencies.realtimeHub.unregister(user.userId, connectionId)
+                    }
+                    val stillOnline = onBlockingIo {
+                        dependencies.presenceStore.disconnect(connectionId)
+                        dependencies.presenceStore.isOnline(user.userId, Instant.now().toEpochMilli())
+                    }
+                    runCatching { publishPresence(dependencies, partnerId, stillOnline) }
+                        .onFailure { error ->
+                            realtimeRoutesLogger.warn(
+                                "Failed to publish final presence state for user {}",
+                                user.userId,
+                                error,
+                            )
+                        }
                 }
-                publishPresence(dependencies, partnerId, stillOnline)
             }
         }
     }
@@ -81,7 +111,7 @@ private suspend fun publishSnapshot(dependencies: ServerDependencies, userId: St
     )
 }
 
-private fun publishPresence(dependencies: ServerDependencies, userId: String, online: Boolean) {
+private suspend fun publishPresence(dependencies: ServerDependencies, userId: String, online: Boolean) {
     dependencies.realtimeEventPublisher.publishToUser(
         userId,
         RealtimeEvent(type = RealtimeEvent.PRESENCE_CHANGED, partnerOnline = online),
@@ -90,3 +120,5 @@ private fun publishPresence(dependencies: ServerDependencies, userId: String, on
 
 private const val HEARTBEAT_MESSAGE = "heartbeat"
 private const val HEARTBEAT_INTERVAL_MILLIS = 15_000L
+private const val HEARTBEAT_STOP_TIMEOUT_MILLIS = 1_000L
+private val realtimeRoutesLogger = LoggerFactory.getLogger("life.fxs.purr.server.realtime.RealtimeRoutes")
