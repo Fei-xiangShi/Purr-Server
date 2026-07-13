@@ -622,6 +622,31 @@ class PurrRoutesTest {
             header("Authorization", "Bearer $userAToken")
         }
         assertEquals(HttpStatusCode.OK, endCall.status)
+
+        val endedCall = client.get("/calls/$callId") {
+            header("Authorization", "Bearer $userAToken")
+        }
+        assertEquals(HttpStatusCode.OK, endedCall.status)
+        assertTrue(endedCall.bodyAsText().contains("\"state\":\"ended\""))
+        assertTrue(endedCall.bodyAsText().contains("\"recordingStatus\":\"stopped\""))
+
+        val repeatedEnd = client.post("/calls/$callId/end") {
+            header("Authorization", "Bearer $userBToken")
+        }
+        assertEquals(HttpStatusCode.OK, repeatedEnd.status)
+
+        val nextSession = client.post("/calls/session") {
+            header("Authorization", "Bearer $userAToken")
+            contentType(ContentType.Application.Json)
+            setBody("""{"pairId":"pair-demo","recordingConsent":true}""")
+        }
+        assertEquals(HttpStatusCode.OK, nextSession.status)
+        val nextCallId = Regex("\\\"callId\\\":\\\"([^\\\"]+)\\\"")
+            .find(nextSession.bodyAsText())
+            ?.groupValues
+            ?.get(1)
+        check(!nextCallId.isNullOrBlank())
+        assertTrue(nextCallId != callId)
     }
 
     @Test

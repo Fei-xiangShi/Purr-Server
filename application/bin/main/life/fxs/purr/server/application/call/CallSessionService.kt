@@ -10,6 +10,7 @@ import life.fxs.purr.server.application.model.CallStatusResult
 import life.fxs.purr.server.application.model.CreateCallSessionCommand
 import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.application.port.CallSessionStore
+import life.fxs.purr.server.application.port.CallTerminator
 import life.fxs.purr.server.application.port.ApplicationTransaction
 import life.fxs.purr.server.application.port.MediaTokenIssuer
 import life.fxs.purr.server.application.port.RealtimeEvent
@@ -30,6 +31,7 @@ class CallSessionService(
     private val consentPolicyVersion: String,
     private val transaction: ApplicationTransaction,
     private val realtimeOutbox: RealtimeOutbox,
+    private val callTerminator: CallTerminator,
     private val nowProvider: () -> Instant = Instant::now,
     private val callIdProvider: () -> String = { "call-${UUID.randomUUID()}" },
 ) {
@@ -81,24 +83,8 @@ class CallSessionService(
     }
 
     fun endCall(userId: String, callId: String) {
-        val call = callAccessPolicy.requireAccessibleCall(userId, callId)
-        if (call.state != CallState.WAITING) return
-        transaction.execute {
-            val endedAt = nowProvider().toEpochMilli()
-            val resolution = callSessionStore.endIfWaiting(callId, endedAt)
-                ?: throw ApplicationException(ApplicationError.NOT_FOUND, "Call not found: $callId")
-            if (resolution.endedNow) {
-                realtimeOutbox.enqueue(
-                    recipientUserId = pairService.requirePartnerUserId(userId),
-                    event = RealtimeEvent(
-                        type = RealtimeEvent.CALL_ENDED,
-                        callId = callId,
-                        pairId = call.pairId,
-                    ),
-                    occurredAtEpochMillis = endedAt,
-                )
-            }
-        }
+        callAccessPolicy.requireAccessibleCall(userId, callId)
+        callTerminator.terminate(callId, nowProvider().toEpochMilli())
     }
 
     private fun newCall(pairId: String, createdByUserId: String): CallRecord {

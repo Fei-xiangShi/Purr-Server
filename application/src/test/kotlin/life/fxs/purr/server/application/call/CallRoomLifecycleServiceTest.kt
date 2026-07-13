@@ -145,6 +145,29 @@ class CallRoomLifecycleServiceTest {
     }
 
     @Test
+    fun `explicit termination shares the idempotent recording and notification path`() {
+        val harness = harness(
+            waitingCall().copy(
+                state = CallState.ACTIVE,
+                connectedAtEpochMillis = NOW.minusSeconds(10).toEpochMilli(),
+                recordingStatus = RecordingStatus.RECORDING,
+                recordingId = "recording-1",
+            ),
+        )
+
+        harness.service.terminate(CALL_ID, NOW.toEpochMilli())
+        harness.service.terminate(CALL_ID, NOW.plusSeconds(1).toEpochMilli())
+
+        assertEquals(CallState.ENDED, harness.calls.call.state)
+        assertEquals(NOW.toEpochMilli(), harness.calls.call.endedAtEpochMillis)
+        assertEquals(RecordingStatus.STOPPED, harness.calls.call.recordingStatus)
+        assertEquals(1, harness.recordingController.stopCalls)
+        assertEquals(1, harness.calls.endTransitions)
+        assertEquals(setOf("user-a", "user-b"), harness.outbox.map { it.first }.toSet())
+        assertEquals(2, harness.outbox.size)
+    }
+
+    @Test
     fun `egress participant leaving does not end call`() {
         val harness = harness(
             waitingCall().copy(

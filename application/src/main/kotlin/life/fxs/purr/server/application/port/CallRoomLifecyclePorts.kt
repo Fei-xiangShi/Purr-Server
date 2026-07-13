@@ -33,6 +33,17 @@ fun interface WaitingCallTerminator {
     fun endWaitingCall(callId: String, endedAtEpochMillis: Long)
 }
 
+/**
+ * Application boundary for explicitly terminating an open call.
+ *
+ * Implementations own the complete terminal transition, including durable
+ * recording shutdown and participant notifications. Request handlers and
+ * provider adapters must not update call state directly.
+ */
+fun interface CallTerminator {
+    fun terminate(callId: String, endedAtEpochMillis: Long)
+}
+
 /** Persisted coordination boundary used by the periodic room reconciler. */
 interface CallRoomReconciliationStore {
     fun findOpenCalls(limit: Int): List<CallRecord>

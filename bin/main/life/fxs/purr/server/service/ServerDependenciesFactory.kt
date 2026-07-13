@@ -289,18 +289,6 @@ object ServerDependenciesFactory {
                 transaction = applicationTransaction,
                 recordingCommandProcessor = commandDispatcher,
             )
-            val callSessionService = CallSessionService(
-                pairService = pairService,
-                callAccessPolicy = callAccessPolicy,
-                callSessionStore = callSessionRepository,
-                recordingConsentStore = callRecordingConsentRepository,
-                mediaTokenIssuer = tokenService,
-                mediaServerWsUrl = config.liveKit.wsUrl,
-                recordingEnabled = config.recording.enabled,
-                consentPolicyVersion = config.recording.consentPolicyVersion,
-                transaction = applicationTransaction,
-                realtimeOutbox = outboxRepository,
-            )
             val callLifecycleService = CallLifecycleService(
                 callSessionStore = callSessionRepository,
                 pairStore = pairBondRepository,
@@ -324,6 +312,19 @@ object ServerDependenciesFactory {
                 transaction = applicationTransaction,
                 recordingCommandWakeup = commandDispatcher,
                 recordingCommandProcessor = commandDispatcher,
+            )
+            val callSessionService = CallSessionService(
+                pairService = pairService,
+                callAccessPolicy = callAccessPolicy,
+                callSessionStore = callSessionRepository,
+                recordingConsentStore = callRecordingConsentRepository,
+                mediaTokenIssuer = tokenService,
+                mediaServerWsUrl = config.liveKit.wsUrl,
+                recordingEnabled = config.recording.enabled,
+                consentPolicyVersion = config.recording.consentPolicyVersion,
+                transaction = applicationTransaction,
+                realtimeOutbox = outboxRepository,
+                callTerminator = callRoomLifecycleService,
             )
             val callRecordingWebhookService = CallRecordingWebhookService(
                 callSessionStore = callSessionRepository,

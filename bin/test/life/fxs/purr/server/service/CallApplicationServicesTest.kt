@@ -13,6 +13,7 @@ import life.fxs.purr.server.config.RecordingConfig
 import life.fxs.purr.server.config.RecordingProvider
 import life.fxs.purr.server.db.DatabaseFactory
 import life.fxs.purr.server.application.port.CallRecord
+import life.fxs.purr.server.application.port.CallTerminator
 import life.fxs.purr.server.application.port.ApplicationTransaction
 import life.fxs.purr.server.application.port.MediaTokenIssuer
 import life.fxs.purr.server.application.port.ProviderRecordingResult
@@ -94,7 +95,7 @@ class CallApplicationServicesTest {
     }
 
     @Test
-    fun `participant leave endpoint does not end an active call`() {
+    fun `explicit end delegates active call termination and allows a new session`() {
         val databaseResources = DatabaseFactory(
             DatabaseConfig(
                 jdbcUrl = "jdbc:h2:mem:call-service-${System.nanoTime()};MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
@@ -163,10 +164,20 @@ class CallApplicationServicesTest {
             assertEquals(0, recordingController.stopCalls.size)
 
             val stored = repository.find(callId) ?: error("call not found")
-            assertEquals(CallState.ACTIVE, stored.state)
+            assertEquals(CallState.ENDED, stored.state)
             assertEquals(RecordingStatus.STARTING, stored.recordingStatus)
             assertEquals("egress-1", stored.recordingId)
-            assertEquals(null, stored.endedAtEpochMillis)
+            assertEquals(stopTime.toEpochMilli(), stored.endedAtEpochMillis)
+
+            val nextSession = service.createSession(
+                userId = "user-a",
+                command = CreateCallSessionCommand(
+                    pairId = "pair-demo",
+                    resumeCallId = null,
+                    recordingConsent = false,
+                ),
+            )
+            check(nextSession.callId != callId)
         } finally {
             (databaseResources.dataSource as? AutoCloseable)?.close()
         }
@@ -321,6 +332,9 @@ private fun createTestServices(
         consentPolicyVersion = recordingConfig.consentPolicyVersion,
         transaction = ImmediateTransaction,
         realtimeOutbox = RealtimeOutbox { _, _, _ -> },
+        callTerminator = CallTerminator { callId, endedAtEpochMillis ->
+            callSessionRepository.endIfOpen(callId, endedAtEpochMillis)
+        },
         nowProvider = nowProvider,
     )
     return TestCallServices(callSessionService, recordingCommandService)

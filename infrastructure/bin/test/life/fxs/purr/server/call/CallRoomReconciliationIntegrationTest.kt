@@ -4,11 +4,19 @@ import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotEquals
+import life.fxs.purr.server.application.account.PairService
+import life.fxs.purr.server.application.call.CallAccessPolicy
 import life.fxs.purr.server.application.call.CallLifecycleService
 import life.fxs.purr.server.application.call.CallRoomLifecycleService
 import life.fxs.purr.server.application.call.CallRoomReconciliationService
+import life.fxs.purr.server.application.call.CallSessionService
+import life.fxs.purr.server.application.model.CreateCallSessionCommand
 import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.application.port.CallRoomParticipantReader
+import life.fxs.purr.server.application.port.MediaTokenIssuer
+import life.fxs.purr.server.application.port.RealtimeEvent
+import life.fxs.purr.server.application.port.RealtimeOutbox
 import life.fxs.purr.server.application.port.RecordingCommandType
 import life.fxs.purr.server.application.port.RecordingConsentStore
 import life.fxs.purr.server.config.DatabaseConfig
@@ -23,6 +31,91 @@ import life.fxs.purr.server.repository.RecordingCommandRepository
 import life.fxs.purr.server.repository.UserRepository
 
 class CallRoomReconciliationIntegrationTest {
+    @Test
+    fun `explicit active call termination is durable idempotent and releases pair for a new call`() {
+        val resources = DatabaseFactory(
+            DatabaseConfig(
+                jdbcUrl = "jdbc:h2:mem:explicit-call-end-${System.nanoTime()};MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+                driverClassName = "org.h2.Driver",
+                username = "sa",
+                password = "",
+                maximumPoolSize = 2,
+            ),
+        ).connect()
+        try {
+            seedPair()
+            val pairStore = PairBondRepository()
+            val users = UserRepository()
+            val pairService = PairService(pairStore, users)
+            val calls = CallSessionRepository()
+            calls.upsert(activeRecordingCall())
+            val recordings = CallRecordingRepository()
+            val commands = RecordingCommandRepository(recordings) { "stop-command-1" }
+            val notifications = mutableListOf<Pair<String, RealtimeEvent>>()
+            val lifecycle = CallLifecycleService(
+                callSessionStore = calls,
+                pairStore = pairStore,
+                transaction = resources.applicationTransaction,
+                realtimeOutbox = RealtimeOutbox { userId, event, _ -> notifications += userId to event },
+            )
+            val roomLifecycle = CallRoomLifecycleService(
+                callSessionStore = calls,
+                callRecordingStore = recordings,
+                recordingConsentStore = NoConsentNeeded,
+                pairStore = pairStore,
+                recordingController = null,
+                callLifecycleService = lifecycle,
+                recordingEnabled = true,
+                consentPolicyVersion = "test-v1",
+                recordingCommandStore = commands,
+                transaction = resources.applicationTransaction,
+            )
+            val callSessionService = CallSessionService(
+                pairService = pairService,
+                callAccessPolicy = CallAccessPolicy(pairService, calls),
+                callSessionStore = calls,
+                recordingConsentStore = NoConsentNeeded,
+                mediaTokenIssuer = MediaTokenIssuer { _, _ -> "token" },
+                mediaServerWsUrl = "ws://localhost:7880",
+                recordingEnabled = false,
+                consentPolicyVersion = "test-v1",
+                transaction = resources.applicationTransaction,
+                realtimeOutbox = RealtimeOutbox { userId, event, _ -> notifications += userId to event },
+                callTerminator = roomLifecycle,
+                nowProvider = { Instant.ofEpochMilli(2_000L) },
+                callIdProvider = { "call-2" },
+            )
+
+            callSessionService.endCall("user-a", CALL_ID)
+            callSessionService.endCall("user-a", CALL_ID)
+
+            val ended = assertNotNull(calls.find(CALL_ID))
+            assertEquals(CallState.ENDED, ended.state)
+            assertEquals(2_000L, ended.endedAtEpochMillis)
+            assertEquals(RecordingStatus.STOPPING, ended.recordingStatus)
+            val stop = assertNotNull(commands.findOpenForCall(CALL_ID, RecordingCommandType.STOP))
+            assertEquals("egress-1", stop.recordingId)
+            assertEquals("stop-command-1", stop.commandId)
+            val endedNotifications = notifications.filter { it.second.type == RealtimeEvent.CALL_ENDED }
+            assertEquals(setOf("user-a", "user-b"), endedNotifications.map { it.first }.toSet())
+            assertEquals(2, endedNotifications.size)
+
+            val nextSession = callSessionService.createSession(
+                userId = "user-a",
+                command = CreateCallSessionCommand(
+                    pairId = PAIR_ID,
+                    resumeCallId = null,
+                    recordingConsent = false,
+                ),
+            )
+            assertNotEquals(CALL_ID, nextSession.callId)
+            assertEquals("call-2", nextSession.callId)
+            assertEquals(CallState.WAITING, calls.find("call-2")?.state)
+        } finally {
+            (resources.dataSource as? AutoCloseable)?.close()
+        }
+    }
+
     @Test
     fun `continuous empty room ends call once and persists one stop command`() {
         val resources = DatabaseFactory(

@@ -7,6 +7,7 @@ import life.fxs.purr.server.application.port.CallRoomEvent
 import life.fxs.purr.server.application.port.CallRoomEventType
 import life.fxs.purr.server.application.port.CallRoomParticipantReader
 import life.fxs.purr.server.application.port.CallSessionStore
+import life.fxs.purr.server.application.port.CallTerminator
 import life.fxs.purr.server.application.port.PairStore
 import life.fxs.purr.server.application.port.ProviderRecordingResult
 import life.fxs.purr.server.application.port.RecordingConsentStore
@@ -44,13 +45,13 @@ class CallRoomLifecycleService(
     private val transaction: ApplicationTransaction = ImmediateCallRoomTransaction,
     private val recordingCommandWakeup: RecordingCommandWakeup? = null,
     private val recordingCommandProcessor: RecordingCommandProcessor? = null,
-) : CallRoomEventHandler {
+) : CallRoomEventHandler, CallTerminator {
     override fun handle(event: CallRoomEvent) {
         val call = callSessionStore.findByRoomName(event.roomName) ?: return
         when (event.type) {
             CallRoomEventType.PARTICIPANT_JOINED -> maybeStartCallWhenReady(event, call)
             CallRoomEventType.PARTICIPANT_LEFT -> maybeEndCallWhenRoomEmpty(event, call)
-            CallRoomEventType.ROOM_FINISHED -> endCall(call)
+            CallRoomEventType.ROOM_FINISHED -> terminate(call.callId, nowProvider().toEpochMilli())
         }
     }
 
@@ -156,28 +157,29 @@ class CallRoomLifecycleService(
             )
             if (presentIdentities.any(expectedIdentities::contains)) return
         }
-        endCall(call)
+        terminate(call.callId, nowProvider().toEpochMilli())
     }
 
     private fun participantIdentity(userId: String, callId: String): String = "$userId-$callId"
 
-    private fun endCall(call: CallRecord) {
-        val endedAt = nowProvider().toEpochMilli()
-        transaction.execute {
-            val current = callSessionStore.find(call.callId) ?: return@execute
+    override fun terminate(callId: String, endedAtEpochMillis: Long) {
+        val stopCommandClaimed = transaction.execute {
+            val current = callSessionStore.find(callId) ?: return@execute false
+            var claimedDurableStop = false
             if (recordingCommandStore != null) {
                 val stopping = callSessionStore.claimRecordingStop(
                     callId = current.callId,
                     recordingId = current.recordingId,
-                    updatedAtEpochMillis = endedAt,
+                    updatedAtEpochMillis = endedAtEpochMillis,
                 )
                 if (stopping != null) {
                     recordingCommandStore.enqueueStop(
                         callId = stopping.callId,
                         roomName = stopping.roomName,
                         recordingId = stopping.recordingId,
-                        requestedAtEpochMillis = endedAt,
+                        requestedAtEpochMillis = endedAtEpochMillis,
                     )
+                    claimedDurableStop = true
                 }
             } else {
                 // Compatibility path for older callers. Production wiring
@@ -186,10 +188,11 @@ class CallRoomLifecycleService(
             }
             callLifecycleService.endOpenCall(
                 callId = current.callId,
-                endedAtEpochMillis = endedAt,
+                endedAtEpochMillis = endedAtEpochMillis,
             )
+            claimedDurableStop
         }
-        if (recordingCommandStore != null) {
+        if (stopCommandClaimed) {
             drainRecordingCommandsBestEffort()
             recordingCommandWakeup?.wake()
         }
