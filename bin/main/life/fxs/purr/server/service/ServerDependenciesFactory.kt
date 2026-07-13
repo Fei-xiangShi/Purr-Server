@@ -47,6 +47,7 @@ import life.fxs.purr.server.redis.RedisClientResources
 import life.fxs.purr.server.seed.BootstrapSeeder
 import life.fxs.purr.server.application.call.CallAccessPolicy
 import life.fxs.purr.server.application.call.CallSessionService
+import life.fxs.purr.server.application.call.CallLifecycleService
 import life.fxs.purr.server.application.call.CallHistoryQueryService
 import life.fxs.purr.server.application.call.RecordingCommandService
 import life.fxs.purr.server.application.call.RecordingQueryService
@@ -256,11 +257,16 @@ object ServerDependenciesFactory {
                 callAccessPolicy = callAccessPolicy,
                 callSessionStore = callSessionRepository,
                 recordingConsentStore = callRecordingConsentRepository,
-                recordingCommandService = recordingCommandService,
                 mediaTokenIssuer = tokenService,
                 mediaServerWsUrl = config.liveKit.wsUrl,
                 recordingEnabled = config.recording.enabled,
                 consentPolicyVersion = config.recording.consentPolicyVersion,
+                transaction = applicationTransaction,
+                realtimeOutbox = outboxRepository,
+            )
+            val callLifecycleService = CallLifecycleService(
+                callSessionStore = callSessionRepository,
+                pairStore = pairBondRepository,
                 transaction = applicationTransaction,
                 realtimeOutbox = outboxRepository,
             )
@@ -281,6 +287,7 @@ object ServerDependenciesFactory {
                 pairBondRepository = pairBondRepository,
                 recordingConfig = config.recording,
                 recordingController = recordingController,
+                callLifecycleService = callLifecycleService,
                 roomParticipantService = recordingAdapters.participantService,
             )
             val recoveryService = RecordingRecoveryService(

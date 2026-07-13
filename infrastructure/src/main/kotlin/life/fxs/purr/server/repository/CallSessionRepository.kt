@@ -3,6 +3,7 @@ package life.fxs.purr.server.repository
 import life.fxs.purr.server.application.port.ActiveCallResolution
 import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.application.port.CallSessionStore
+import life.fxs.purr.server.application.port.CallRoomReconciliationStore
 import life.fxs.purr.server.application.port.EndCallResolution
 import life.fxs.purr.server.application.model.CallHistoryCursor
 import life.fxs.purr.server.db.table.CallSessionsTable
@@ -24,7 +25,7 @@ import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
 
-class CallSessionRepository : CallSessionStore {
+class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
     override fun find(callId: String): CallRecord? = transaction {
         CallSessionsTable.selectAll()
             .where { CallSessionsTable.callId eq callId }
@@ -32,14 +33,14 @@ class CallSessionRepository : CallSessionStore {
             ?.toCallRecord()
     }
 
-    fun findByRecordingId(recordingId: String): CallRecord? = transaction {
+    override fun findByRecordingId(recordingId: String): CallRecord? = transaction {
         CallSessionsTable.selectAll()
             .where { CallSessionsTable.recordingId eq recordingId }
             .singleOrNull()
             ?.toCallRecord()
     }
 
-    fun findByRoomName(roomName: String): CallRecord? = transaction {
+    override fun findByRoomName(roomName: String): CallRecord? = transaction {
         CallSessionsTable.selectAll()
             .where { CallSessionsTable.roomName eq roomName }
             .singleOrNull()
@@ -75,17 +76,46 @@ class CallSessionRepository : CallSessionStore {
         return call
     }
 
-    override fun endIfActive(callId: String, endedAtEpochMillis: Long): EndCallResolution? {
+    override fun activateIfWaiting(callId: String, connectedAtEpochMillis: Long): CallRecord? {
+        transaction {
+            CallSessionsTable.update(
+                where = {
+                    (CallSessionsTable.callId eq callId) and
+                        (CallSessionsTable.callState eq CallState.WAITING.wireValue) and
+                        CallSessionsTable.connectedAtEpochMillis.isNull()
+                },
+            ) {
+                it[callState] = CallState.ACTIVE.wireValue
+                it[CallSessionsTable.connectedAtEpochMillis] = connectedAtEpochMillis
+                it[roomEmptySinceEpochMillis] = null
+                it[updatedAtEpochMillis] = connectedAtEpochMillis
+            }
+        }
+        return find(callId)
+    }
+
+    override fun endIfWaiting(callId: String, endedAtEpochMillis: Long): EndCallResolution? =
+        endIfStateMatches(callId, endedAtEpochMillis, listOf(CallState.WAITING.wireValue))
+
+    override fun endIfOpen(callId: String, endedAtEpochMillis: Long): EndCallResolution? =
+        endIfStateMatches(callId, endedAtEpochMillis, openCallStates)
+
+    private fun endIfStateMatches(
+        callId: String,
+        endedAtEpochMillis: Long,
+        expectedStates: List<String>,
+    ): EndCallResolution? {
         val updatedRows = transaction {
             CallSessionsTable.update(
                 where = {
                     (CallSessionsTable.callId eq callId) and
-                        (CallSessionsTable.callState eq CallState.ACTIVE.wireValue)
+                        (CallSessionsTable.callState inList expectedStates)
                 },
             ) {
                 it[callState] = CallState.ENDED.wireValue
                 it[activePairId] = null
                 it[CallSessionsTable.endedAtEpochMillis] = endedAtEpochMillis
+                it[roomEmptySinceEpochMillis] = null
                 it[updatedAtEpochMillis] = endedAtEpochMillis
             }
         }
@@ -104,16 +134,42 @@ class CallSessionRepository : CallSessionStore {
             ) {
                 it[recordingStatus] = RecordingStatus.STARTING.wireValue
                 it[recordingId] = null
+                it[recordingProviderUpdatedAtEpochMillis] = null
                 it[recordingRecoveryAttempts] = 0
                 it[recordingLastRecoveryAtEpochMillis] = null
                 it[recordingErrorMessage] = null
-                it[CallSessionsTable.updatedAtEpochMillis] = updatedAtEpochMillis
             }
         }
         if (updatedRows == 0) {
             return null
         }
         return find(callId)
+    }
+
+    override fun claimRecordingStop(
+        callId: String,
+        recordingId: String?,
+        updatedAtEpochMillis: Long,
+    ): CallRecord? {
+        val updatedRows = transaction {
+            CallSessionsTable.update(
+                where = {
+                    (CallSessionsTable.callId eq callId) and
+                        (CallSessionsTable.recordingStatus inList listOf(
+                            RecordingStatus.STARTING.wireValue,
+                            RecordingStatus.RECORDING.wireValue,
+                        )) and
+                        (recordingId?.let { CallSessionsTable.recordingId eq it }
+                            ?: CallSessionsTable.recordingId.isNull())
+                },
+            ) {
+                it[recordingStatus] = RecordingStatus.STOPPING.wireValue
+                // A START command may not have received its provider id yet;
+                // the STOP command remains nullable and resolves it later.
+                if (recordingId != null) it[CallSessionsTable.recordingId] = recordingId
+            }
+        }
+        return if (updatedRows == 1) find(callId) else null
     }
 
     override fun findEndedByPairId(
@@ -124,12 +180,13 @@ class CallSessionRepository : CallSessionStore {
         val endedCalls =
             (CallSessionsTable.pairId eq pairId) and
                 (CallSessionsTable.callState eq CallState.ENDED.wireValue) and
-                CallSessionsTable.endedAtEpochMillis.isNotNull()
+                CallSessionsTable.endedAtEpochMillis.isNotNull() and
+                CallSessionsTable.connectedAtEpochMillis.isNotNull()
         val condition = cursor?.let {
             endedCalls and (
-                (CallSessionsTable.startedAtEpochMillis less it.startedAtEpochMillis) or
+                (CallSessionsTable.connectedAtEpochMillis less it.startedAtEpochMillis) or
                     (
-                        (CallSessionsTable.startedAtEpochMillis eq it.startedAtEpochMillis) and
+                        (CallSessionsTable.connectedAtEpochMillis eq it.startedAtEpochMillis) and
                             (CallSessionsTable.callId less it.callId)
                         )
                 )
@@ -137,11 +194,49 @@ class CallSessionRepository : CallSessionStore {
         CallSessionsTable.selectAll()
             .where { condition }
             .orderBy(
-                CallSessionsTable.startedAtEpochMillis to SortOrder.DESC,
+                CallSessionsTable.connectedAtEpochMillis to SortOrder.DESC,
                 CallSessionsTable.callId to SortOrder.DESC,
             )
             .limit(limit)
             .map { it.toCallRecord() }
+    }
+
+    override fun findOpenCalls(limit: Int): List<CallRecord> = transaction {
+        CallSessionsTable.selectAll()
+            .where { CallSessionsTable.callState inList openCallStates }
+            .orderBy(CallSessionsTable.startedAtEpochMillis to SortOrder.ASC)
+            .limit(limit)
+            .map { it.toCallRecord() }
+    }
+
+    override fun observeRoomEmpty(
+        callId: String,
+        observedAtEpochMillis: Long,
+    ): CallRecord? {
+        transaction {
+            CallSessionsTable.update(
+                where = {
+                    (CallSessionsTable.callId eq callId) and
+                        (CallSessionsTable.callState eq CallState.ACTIVE.wireValue) and
+                        CallSessionsTable.roomEmptySinceEpochMillis.isNull()
+                },
+            ) {
+                it[roomEmptySinceEpochMillis] = observedAtEpochMillis
+            }
+        }
+        return find(callId)?.takeIf { it.state == CallState.ACTIVE }
+    }
+
+    override fun clearRoomEmptyObservation(callId: String): Boolean = transaction {
+        CallSessionsTable.update(
+            where = {
+                (CallSessionsTable.callId eq callId) and
+                    (CallSessionsTable.callState eq CallState.ACTIVE.wireValue) and
+                    CallSessionsTable.roomEmptySinceEpochMillis.isNotNull()
+            },
+        ) {
+            it[roomEmptySinceEpochMillis] = null
+        } == 1
     }
 
     fun updateRecording(
@@ -157,7 +252,7 @@ class CallSessionRepository : CallSessionStore {
                 it[recordingRecoveryAttempts] = 0
                 it[recordingLastRecoveryAtEpochMillis] = null
                 it[recordingErrorMessage] = null
-                it[CallSessionsTable.updatedAtEpochMillis] = updatedAtEpochMillis
+                it[recordingProviderUpdatedAtEpochMillis] = updatedAtEpochMillis
             }
         }
         return find(callId)
@@ -223,7 +318,6 @@ class CallSessionRepository : CallSessionStore {
                 it[recordingErrorMessage] = message.take(MAX_RECORDING_ERROR_LENGTH)
                 if (terminal) {
                     it[recordingStatus] = RecordingStatus.FAILED.wireValue
-                    it[updatedAtEpochMillis] = failedAtEpochMillis
                 }
             }
         }
@@ -236,6 +330,7 @@ class CallSessionRepository : CallSessionStore {
         createdByUserId = this[CallSessionsTable.createdByUserId],
         startedAtEpochMillis = this[CallSessionsTable.startedAtEpochMillis],
         updatedAtEpochMillis = this[CallSessionsTable.updatedAtEpochMillis],
+        recordingProviderUpdatedAtEpochMillis = this[CallSessionsTable.recordingProviderUpdatedAtEpochMillis],
         state = CallState.entries.first { it.wireValue == this[CallSessionsTable.callState] },
         recordingStatus = RecordingStatus.entries.first { it.wireValue == this[CallSessionsTable.recordingStatus] },
         recordingId = this[CallSessionsTable.recordingId],
@@ -243,6 +338,8 @@ class CallSessionRepository : CallSessionStore {
         recordingLastRecoveryAtEpochMillis = this[CallSessionsTable.recordingLastRecoveryAtEpochMillis],
         recordingErrorMessage = this[CallSessionsTable.recordingErrorMessage],
         endedAtEpochMillis = this[CallSessionsTable.endedAtEpochMillis],
+        connectedAtEpochMillis = this[CallSessionsTable.connectedAtEpochMillis],
+        roomEmptySinceEpochMillis = this[CallSessionsTable.roomEmptySinceEpochMillis],
     )
 
     private fun findActiveByPairInCurrentTransaction(pairId: String): CallRecord? =
@@ -255,12 +352,15 @@ class CallSessionRepository : CallSessionStore {
         CallSessionsTable.insert {
             it[callId] = call.callId
             it[pairId] = call.pairId
-            it[activePairId] = call.pairId.takeIf { call.state == CallState.ACTIVE }
+            it[activePairId] = call.pairId.takeIf { call.state in openCallStatesAsEnums }
             it[roomName] = call.roomName
             it[createdByUserId] = call.createdByUserId
             it[startedAtEpochMillis] = call.startedAtEpochMillis
             it[updatedAtEpochMillis] = call.updatedAtEpochMillis
+            it[recordingProviderUpdatedAtEpochMillis] = call.recordingProviderUpdatedAtEpochMillis
             it[endedAtEpochMillis] = call.endedAtEpochMillis
+            it[connectedAtEpochMillis] = call.connectedAtEpochMillis
+            it[roomEmptySinceEpochMillis] = call.roomEmptySinceEpochMillis
             it[callState] = call.state.wireValue
             it[recordingStatus] = call.recordingStatus.wireValue
             it[recordingId] = call.recordingId
@@ -280,6 +380,8 @@ class CallSessionRepository : CallSessionStore {
             RecordingStatus.STARTING.wireValue,
             RecordingStatus.STOPPING.wireValue,
         )
+        val openCallStates = listOf(CallState.WAITING.wireValue, CallState.ACTIVE.wireValue)
+        val openCallStatesAsEnums = setOf(CallState.WAITING, CallState.ACTIVE)
         const val MAX_RECORDING_ERROR_LENGTH = 2_048
     }
 }

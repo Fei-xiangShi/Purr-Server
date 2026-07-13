@@ -291,6 +291,7 @@ class PurrRoutesTest {
             header("Authorization", "Bearer $userBToken")
         }
         assertEquals(HttpStatusCode.OK, afterFirstJoin.status)
+        assertTrue(afterFirstJoin.bodyAsText().contains("\"state\":\"waiting\""))
         assertTrue(afterFirstJoin.bodyAsText().contains("\"recordingStatus\":\"idle\""))
 
         client.postLiveKitWebhook(
@@ -312,6 +313,9 @@ class PurrRoutesTest {
             header("Authorization", "Bearer $userBToken")
         }
         assertEquals(HttpStatusCode.OK, afterSecondJoin.status)
+        assertTrue(afterSecondJoin.bodyAsText().contains("\"state\":\"active\""))
+        assertTrue(afterSecondJoin.bodyAsText().contains("\"startedAtEpochMillis\":"))
+        assertTrue(afterSecondJoin.bodyAsText().contains("\"durationMillis\":"))
         assertTrue(afterSecondJoin.bodyAsText().contains("\"recordingStatus\":\"recording\""))
 
         client.postLiveKitWebhook(
@@ -506,7 +510,6 @@ class PurrRoutesTest {
             header("Authorization", "Bearer $userAToken")
         }
         assertEquals(HttpStatusCode.OK, afterFirstJoin.status)
-        assertTrue(afterFirstJoin.bodyAsText().contains("\"recordingStatus\":\"idle\""))
 
         client.postLiveKitWebhook(
             """
@@ -537,12 +540,21 @@ class PurrRoutesTest {
             """.trimIndent(),
         )
 
+        client.postLiveKitWebhook(
+            """
+                {
+                  "event":"participant_joined",
+                  "id":"event-$callId-b-join",
+                  "room":{"name":"$roomName","numParticipants":2},
+                  "participant":{"identity":"user-b-$callId","state":"ACTIVE","kind":"STANDARD"}
+                }
+            """.trimIndent(),
+        )
+
         val callStatus = client.get("/calls/$callId") {
             header("Authorization", "Bearer $userAToken")
         }
         assertEquals(HttpStatusCode.OK, callStatus.status)
-        val body = callStatus.bodyAsText()
-        assertTrue(body.contains("\"recordingStatus\":\"idle\""))
 
         val endCall = client.post("/calls/$callId/end") {
             header("Authorization", "Bearer $userAToken")
@@ -571,19 +583,27 @@ class PurrRoutesTest {
         }
         assertEquals(HttpStatusCode.OK, sessionB.status)
 
+        listOf(
+            "user-a-$callId" to 1,
+            "user-b-$callId" to 2,
+        ).forEach { (identity, count) ->
+            client.postLiveKitWebhook(
+                """
+                    {
+                      "event":"participant_joined",
+                      "id":"event-$callId-$count",
+                      "room":{"name":"pair-demo-$callId","numParticipants":$count},
+                      "participant":{"identity":"$identity","state":"ACTIVE","kind":"STANDARD"}
+                    }
+                """.trimIndent(),
+            )
+        }
+
         val startRecording = client.post("/calls/$callId/recording/start") {
             header("Authorization", "Bearer $userAToken")
         }
-        assertEquals(HttpStatusCode.OK, startRecording.status)
-        assertTrue(startRecording.bodyAsText().contains("\"status\":\"recording\"") || startRecording.bodyAsText().contains("\"status\":\"starting\""))
-
-        val stopRecording = client.post("/calls/$callId/recording/stop") {
-            header("Authorization", "Bearer $userAToken")
-        }
-        if (startRecording.bodyAsText().contains("\"status\":\"starting\"")) {
-            assertEquals(HttpStatusCode.BadRequest, stopRecording.status)
-            assertTrue(stopRecording.bodyAsText().contains("still starting"))
-        }
+        assertEquals(HttpStatusCode.Conflict, startRecording.status)
+        assertTrue(startRecording.bodyAsText().contains("already in progress"))
 
         val endCall = client.post("/calls/$callId/end") {
             header("Authorization", "Bearer $userAToken")

@@ -3,11 +3,11 @@ package life.fxs.purr.server.livekit
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -32,14 +32,20 @@ class RecordingRecoveryService(
     private val logger = LoggerFactory.getLogger(javaClass)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val started = AtomicBoolean(false)
+    private val closed = AtomicBoolean(false)
     private var job: Job? = null
 
     fun start() {
-        if (!config.recoveryEnabled || !started.compareAndSet(false, true)) return
+        if (closed.get() || !config.recoveryEnabled || !started.compareAndSet(false, true)) return
         job = scope.launch {
-            while (isActive) {
-                runCatching { recoverOnce() }
-                    .onFailure { logger.error("Recording recovery pass failed", it) }
+            while (isActive && !closed.get()) {
+                try {
+                    recoverOnce()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    logger.error("Recording recovery pass failed", error)
+                }
                 delay(config.recoveryIntervalSeconds * MILLIS_PER_SECOND)
             }
         }
@@ -81,7 +87,9 @@ class RecordingRecoveryService(
     }
 
     override fun close() {
-        runBlocking { job?.cancelAndJoin() }
+        if (!closed.compareAndSet(false, true)) return
+        job?.cancel()
+        runBlocking { job?.join() }
         scope.cancel()
     }
 

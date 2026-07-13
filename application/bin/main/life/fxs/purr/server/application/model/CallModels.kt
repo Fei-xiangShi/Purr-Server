@@ -23,8 +23,10 @@ data class CallStatusResult(
     val pairId: String,
     val state: CallState,
     val recordingStatus: RecordingStatus,
-    val startedAtEpochMillis: Long,
+    val startedAtEpochMillis: Long?,
     val endedAtEpochMillis: Long?,
+    val durationMillis: Long?,
+    val serverNowEpochMillis: Long,
 )
 
 data class ActiveCallResult(

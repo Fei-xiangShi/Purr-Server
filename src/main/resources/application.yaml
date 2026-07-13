@@ -72,6 +72,12 @@ purr:
     maxAttempts: 10
     retryBaseSeconds: 1
     retryMaxSeconds: 300
+  callReconciliation:
+    enabled: false
+    intervalSeconds: 10
+    waitingTtlSeconds: 120
+    emptyRoomGraceSeconds: 15
+    batchSize: 100
   rateLimit:
     provider: local
     limit: 10
@@ -80,7 +86,7 @@ purr:
     redisPassword: ""
     keyPrefix: "purr:rate-limit:auth"
   database:
-    jdbcUrl: "jdbc:h2:mem:purr;MODE=PostgreSQL;DB_CLOSE_DELAY=-1"
+    jdbcUrl: "jdbc:h2:mem:purr;MODE=PostgreSQL;DB_CLOSE_DELAY=0"
     driverClassName: org.h2.Driver
     username: sa
     password: ""

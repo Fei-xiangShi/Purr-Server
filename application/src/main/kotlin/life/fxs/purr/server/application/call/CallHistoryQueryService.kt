@@ -20,7 +20,9 @@ class CallHistoryQueryService(
         return CallHistoryResult(
             calls = calls.map(CallRecord::toHistoryItem),
             nextCursor = calls.lastOrNull()?.takeIf { hasMore }?.let { call ->
-                CallHistoryCursorCodec.encode(CallHistoryCursor(call.startedAtEpochMillis, call.callId))
+                CallHistoryCursorCodec.encode(
+                    CallHistoryCursor(requireNotNull(call.connectedAtEpochMillis), call.callId),
+                )
             },
         )
     }
@@ -28,9 +30,12 @@ class CallHistoryQueryService(
 
 private fun CallRecord.toHistoryItem(): CallHistoryItemResult {
     val endedAt = requireNotNull(endedAtEpochMillis) { "History query returned an active call: $callId" }
+    val connectedAt = requireNotNull(connectedAtEpochMillis) {
+        "History query returned a call without a server connection boundary: $callId"
+    }
     return CallHistoryItemResult(
         callId = callId,
-        startedAtEpochMillis = startedAtEpochMillis,
-        durationMillis = (endedAt - startedAtEpochMillis).coerceAtLeast(0L),
+        startedAtEpochMillis = connectedAt,
+        durationMillis = (endedAt - connectedAt).coerceAtLeast(0L),
     )
 }

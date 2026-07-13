@@ -94,7 +94,7 @@ class CallApplicationServicesTest {
     }
 
     @Test
-    fun `end call stops recording that is still starting once recording id exists`() {
+    fun `participant leave endpoint does not end an active call`() {
         val databaseResources = DatabaseFactory(
             DatabaseConfig(
                 jdbcUrl = "jdbc:h2:mem:call-service-${System.nanoTime()};MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
@@ -160,14 +160,13 @@ class CallApplicationServicesTest {
 
             service.endCall(userId = "user-a", callId = callId)
 
-            assertEquals(1, recordingController.stopCalls.size)
-            assertEquals(FakeRecordingController.StopCall(callId, roomName, "egress-1"), recordingController.stopCalls.single())
+            assertEquals(0, recordingController.stopCalls.size)
 
             val stored = repository.find(callId) ?: error("call not found")
-            assertEquals(CallState.ENDED, stored.state)
-            assertEquals(RecordingStatus.STOPPING, stored.recordingStatus)
+            assertEquals(CallState.ACTIVE, stored.state)
+            assertEquals(RecordingStatus.STARTING, stored.recordingStatus)
             assertEquals("egress-1", stored.recordingId)
-            assertEquals(stopTime.toEpochMilli(), stored.endedAtEpochMillis)
+            assertEquals(null, stored.endedAtEpochMillis)
         } finally {
             (databaseResources.dataSource as? AutoCloseable)?.close()
         }
@@ -316,7 +315,6 @@ private fun createTestServices(
         callAccessPolicy = accessPolicy,
         callSessionStore = callSessionRepository,
         recordingConsentStore = callRecordingConsentRepository,
-        recordingCommandService = recordingCommandService,
         mediaTokenIssuer = mediaTokenIssuer,
         mediaServerWsUrl = liveKitConfig.wsUrl,
         recordingEnabled = recordingConfig.enabled,

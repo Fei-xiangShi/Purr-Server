@@ -24,7 +24,6 @@ class CallSessionService(
     private val callAccessPolicy: CallAccessPolicy,
     private val callSessionStore: CallSessionStore,
     private val recordingConsentStore: RecordingConsentStore,
-    private val recordingCommandService: RecordingCommandService,
     private val mediaTokenIssuer: MediaTokenIssuer,
     private val mediaServerWsUrl: String,
     private val recordingEnabled: Boolean,
@@ -71,8 +70,10 @@ class CallSessionService(
         return call.toSessionResult(userId)
     }
 
-    fun getCall(userId: String, callId: String): CallStatusResult =
-        callAccessPolicy.requireAccessibleCall(userId, callId).toStatusResult()
+    fun getCall(userId: String, callId: String): CallStatusResult {
+        val serverNow = nowProvider().toEpochMilli()
+        return callAccessPolicy.requireAccessibleCall(userId, callId).toStatusResult(serverNow)
+    }
 
     fun getActiveCall(userId: String): ActiveCallResult? {
         val pairId = pairService.requirePairId(userId)
@@ -81,10 +82,10 @@ class CallSessionService(
 
     fun endCall(userId: String, callId: String) {
         val call = callAccessPolicy.requireAccessibleCall(userId, callId)
-        recordingCommandService.stopForCallEnding(call)
+        if (call.state != CallState.WAITING) return
         transaction.execute {
             val endedAt = nowProvider().toEpochMilli()
-            val resolution = callSessionStore.endIfActive(callId, endedAt)
+            val resolution = callSessionStore.endIfWaiting(callId, endedAt)
                 ?: throw ApplicationException(ApplicationError.NOT_FOUND, "Call not found: $callId")
             if (resolution.endedNow) {
                 realtimeOutbox.enqueue(
@@ -110,7 +111,7 @@ class CallSessionService(
             createdByUserId = createdByUserId,
             startedAtEpochMillis = now,
             updatedAtEpochMillis = now,
-            state = CallState.ACTIVE,
+            state = CallState.WAITING,
             recordingStatus = RecordingStatus.IDLE,
         )
     }
@@ -127,14 +128,21 @@ class CallSessionService(
         )
     }
 
-    private fun CallRecord.toStatusResult() = CallStatusResult(
-        callId = callId,
-        pairId = pairId,
-        state = state,
-        recordingStatus = recordingStatus,
-        startedAtEpochMillis = startedAtEpochMillis,
-        endedAtEpochMillis = endedAtEpochMillis,
-    )
+    private fun CallRecord.toStatusResult(serverNowEpochMillis: Long): CallStatusResult {
+        val durationMillis = connectedAtEpochMillis?.let { connectedAt ->
+            ((endedAtEpochMillis ?: serverNowEpochMillis) - connectedAt).coerceAtLeast(0L)
+        }
+        return CallStatusResult(
+            callId = callId,
+            pairId = pairId,
+            state = state,
+            recordingStatus = recordingStatus,
+            startedAtEpochMillis = connectedAtEpochMillis,
+            endedAtEpochMillis = endedAtEpochMillis,
+            durationMillis = durationMillis,
+            serverNowEpochMillis = serverNowEpochMillis,
+        )
+    }
 
     private fun CallRecord.toActiveCallResult(userId: String) = ActiveCallResult(
         callId = callId,

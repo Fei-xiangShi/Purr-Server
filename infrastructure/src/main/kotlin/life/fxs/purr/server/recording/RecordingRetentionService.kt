@@ -3,11 +3,11 @@ package life.fxs.purr.server.recording
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -25,14 +25,20 @@ class RecordingRetentionService(
     private val logger = LoggerFactory.getLogger(javaClass)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val started = AtomicBoolean(false)
+    private val closed = AtomicBoolean(false)
     private var job: Job? = null
 
     fun start() {
-        if (!config.cleanupEnabled || !started.compareAndSet(false, true)) return
+        if (closed.get() || !config.cleanupEnabled || !started.compareAndSet(false, true)) return
         job = scope.launch {
-            while (isActive) {
-                runCatching { cleanupOnce() }
-                    .onFailure { logger.error("Recording retention pass failed", it) }
+            while (isActive && !closed.get()) {
+                try {
+                    cleanupOnce()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    logger.error("Recording retention pass failed", error)
+                }
                 delay(config.cleanupIntervalSeconds * MILLIS_PER_SECOND)
             }
         }
@@ -74,7 +80,9 @@ class RecordingRetentionService(
     }
 
     override fun close() {
-        runBlocking { job?.cancelAndJoin() }
+        if (!closed.compareAndSet(false, true)) return
+        job?.cancel()
+        runBlocking { job?.join() }
         scope.cancel()
     }
 

@@ -163,6 +163,33 @@ object PurrConfigLoader {
                 password = string(config, "purr.database.password", "PURR_DB_PASSWORD"),
                 maximumPoolSize = int(config, "purr.database.maximumPoolSize", "PURR_DB_MAXIMUM_POOL_SIZE"),
             ),
+            callReconciliation = CallReconciliationConfig(
+                enabled = boolean(
+                    config,
+                    "purr.callReconciliation.enabled",
+                    "PURR_CALL_RECONCILIATION_ENABLED",
+                ),
+                intervalSeconds = long(
+                    config,
+                    "purr.callReconciliation.intervalSeconds",
+                    "PURR_CALL_RECONCILIATION_INTERVAL_SECONDS",
+                ),
+                waitingTtlSeconds = long(
+                    config,
+                    "purr.callReconciliation.waitingTtlSeconds",
+                    "PURR_CALL_RECONCILIATION_WAITING_TTL_SECONDS",
+                ),
+                emptyRoomGraceSeconds = long(
+                    config,
+                    "purr.callReconciliation.emptyRoomGraceSeconds",
+                    "PURR_CALL_RECONCILIATION_EMPTY_ROOM_GRACE_SECONDS",
+                ),
+                batchSize = int(
+                    config,
+                    "purr.callReconciliation.batchSize",
+                    "PURR_CALL_RECONCILIATION_BATCH_SIZE",
+                ),
+            ),
         )
         validate(serverConfig)
         return serverConfig
@@ -302,8 +329,26 @@ object PurrConfigLoader {
         require(config.rateLimit.keyPrefix.matches(Regex("[A-Za-z0-9:_-]{1,128}"))) {
             "Rate limit key prefix contains invalid characters"
         }
+        require(config.callReconciliation.intervalSeconds in 1..300) {
+            "Call reconciliation interval must be between 1 and 300 seconds"
+        }
+        require(config.callReconciliation.waitingTtlSeconds >= config.callReconciliation.intervalSeconds) {
+            "Call waiting TTL must not be shorter than the reconciliation interval"
+        }
+        require(config.callReconciliation.waitingTtlSeconds in 10..86_400) {
+            "Call waiting TTL must be between 10 and 86400 seconds"
+        }
+        require(config.callReconciliation.emptyRoomGraceSeconds in 1..3_600) {
+            "Empty room grace must be between 1 and 3600 seconds"
+        }
+        require(config.callReconciliation.batchSize in 1..1_000) {
+            "Call reconciliation batch size must be between 1 and 1000"
+        }
 
         if (config.environment == RuntimeEnvironment.PRODUCTION) {
+            require(config.callReconciliation.enabled) {
+                "Production call reconciliation must be enabled"
+            }
             require(!config.auth.jwtSecret.isPlaceholderSecret()) {
                 "Development or placeholder JWT secret is forbidden in production"
             }

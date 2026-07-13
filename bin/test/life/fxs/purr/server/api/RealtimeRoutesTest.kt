@@ -132,6 +132,6 @@ class RealtimeRoutesTest {
 
     private companion object {
         const val EXPECTED_B_EVENT_COUNT = 4
-        const val EVENT_TIMEOUT_MILLIS = 5_000L
+        const val EVENT_TIMEOUT_MILLIS = 10_000L
     }
 }

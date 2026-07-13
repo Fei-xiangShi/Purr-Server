@@ -8,6 +8,8 @@ data class CallStatusDto(
     val pairId: String,
     val state: String,
     val recordingStatus: String,
-    val startedAtEpochMillis: Long,
+    val startedAtEpochMillis: Long? = null,
     val endedAtEpochMillis: Long? = null,
+    val durationMillis: Long? = null,
+    val serverNowEpochMillis: Long,
 )

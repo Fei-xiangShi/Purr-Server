@@ -213,5 +213,12 @@ class PurrConfigLoaderTest {
             password = "database-password",
             maximumPoolSize = 5,
         ),
+        callReconciliation = CallReconciliationConfig(
+            enabled = true,
+            intervalSeconds = 10,
+            waitingTtlSeconds = 120,
+            emptyRoomGraceSeconds = 15,
+            batchSize = 100,
+        ),
     )
 }

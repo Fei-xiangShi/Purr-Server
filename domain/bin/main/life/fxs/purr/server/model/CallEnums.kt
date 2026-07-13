@@ -1,6 +1,7 @@
 package life.fxs.purr.server.model
 
 enum class CallState(val wireValue: String) {
+    WAITING("waiting"),
     ACTIVE("active"),
     ENDED("ended"),
 }

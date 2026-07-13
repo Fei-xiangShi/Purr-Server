@@ -56,5 +56,6 @@ class CallSessionRepositoryTest {
         state = if (endedAt == null) CallState.ACTIVE else CallState.ENDED,
         recordingStatus = RecordingStatus.IDLE,
         endedAtEpochMillis = endedAt,
+        connectedAtEpochMillis = startedAt.takeIf { endedAt != null },
     )
 }

@@ -19,6 +19,7 @@ data class CallRecord(
     val recordingLastRecoveryAtEpochMillis: Long? = null,
     val recordingErrorMessage: String? = null,
     val endedAtEpochMillis: Long? = null,
+    val connectedAtEpochMillis: Long? = null,
 )
 
 data class ActiveCallResolution(
@@ -38,7 +39,11 @@ interface CallSessionStore {
 
     fun findOrCreateActive(pairId: String, newCall: () -> CallRecord): ActiveCallResolution
 
-    fun endIfActive(callId: String, endedAtEpochMillis: Long): EndCallResolution?
+    fun activateIfWaiting(callId: String, connectedAtEpochMillis: Long): CallRecord?
+
+    fun endIfWaiting(callId: String, endedAtEpochMillis: Long): EndCallResolution?
+
+    fun endIfOpen(callId: String, endedAtEpochMillis: Long): EndCallResolution?
 
     fun claimRecordingStart(callId: String, updatedAtEpochMillis: Long): CallRecord?
 

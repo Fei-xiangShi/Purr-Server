@@ -27,16 +27,18 @@ class CallRecordingRepository : CallRecordingStore {
             .singleOrNull()
             ?: return@transaction false
 
-        val resultIsCurrent = result.recordingId == call[CallSessionsTable.recordingId] ||
-            call[CallSessionsTable.recordingId] == null
-        if (resultIsCurrent && result.updatedAtEpochMillis >= call[CallSessionsTable.updatedAtEpochMillis]) {
+        val currentRecordingId = call[CallSessionsTable.recordingId]
+        val resultIsCurrent = result.recordingId == currentRecordingId || currentRecordingId == null
+        val currentRecordingClock = call[CallSessionsTable.recordingProviderUpdatedAtEpochMillis]
+            ?: Long.MIN_VALUE
+        if (resultIsCurrent && result.updatedAtEpochMillis >= currentRecordingClock) {
             CallSessionsTable.update({ CallSessionsTable.callId eq callId }) {
                 it[recordingStatus] = result.status.wireValue
                 it[recordingId] = result.recordingId
                 it[recordingRecoveryAttempts] = 0
                 it[recordingLastRecoveryAtEpochMillis] = null
                 it[recordingErrorMessage] = result.errorMessage?.take(MAX_RECORDING_ERROR_LENGTH)
-                it[updatedAtEpochMillis] = result.updatedAtEpochMillis
+                it[recordingProviderUpdatedAtEpochMillis] = result.updatedAtEpochMillis
             }
         }
         result.recordingId?.let { recordingId ->

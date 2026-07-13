@@ -68,6 +68,10 @@ val verifyArchitecture by tasks.registering {
         project(":application").layout.projectDirectory.dir("src/main/kotlin"),
     )
     inputs.files(protectedSources)
+    val liveKitWebhookAdapter = project(":infrastructure").file(
+        "src/main/kotlin/life/fxs/purr/server/livekit/LiveKitWebhookService.kt",
+    )
+    inputs.file(liveKitWebhookAdapter)
     doLast {
         val forbiddenImports = listOf(
             "io.ktor",
@@ -101,9 +105,31 @@ val verifyArchitecture by tasks.registering {
         check(violations.isEmpty()) {
             "Architecture boundary violations:\n${violations.joinToString("\n")}"
         }
+
+        val webhookOrchestrationLeaks = liveKitWebhookAdapter.readLines().mapIndexedNotNull { index, line ->
+            line.takeIf {
+                it.startsWith("import life.fxs.purr.server.repository.") ||
+                    it.contains("RecordingController") ||
+                    it.contains("RecordingConsentStore") ||
+                    it.contains("CallSessionStore") ||
+                    it.contains("CallRecordingStore")
+            }?.let { "${liveKitWebhookAdapter.relativeTo(rootDir)}:${index + 1}: $it" }
+        }
+        check(webhookOrchestrationLeaks.isEmpty()) {
+            "LiveKitWebhookService must remain a provider adapter and delegate business orchestration:\n" +
+                webhookOrchestrationLeaks.joinToString("\n")
+        }
     }
 }
 
 tasks.named("check") {
     dependsOn(verifyArchitecture)
+}
+
+// Ktor API tests create an isolated embedded database per application. Exposed
+// keeps its default transaction manager process-global, so API test classes
+// must not share a worker JVM while their background dispatchers shut down.
+tasks.named<Test>("test") {
+    maxParallelForks = 1
+    forkEvery = 1
 }

@@ -5,11 +5,11 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -28,14 +28,21 @@ class OutboxDispatcher(
     private val logger = LoggerFactory.getLogger(javaClass)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val started = AtomicBoolean(false)
+    private val closed = AtomicBoolean(false)
     private var job: Job? = null
 
     fun start() {
+        check(!closed.get()) { "Outbox dispatcher is closed" }
         check(started.compareAndSet(false, true)) { "Outbox dispatcher is already started" }
         job = scope.launch {
-            while (isActive) {
-                runCatching { dispatchOnce() }
-                    .onFailure { logger.error("Realtime outbox dispatch pass failed", it) }
+            while (isActive && !closed.get()) {
+                try {
+                    dispatchOnce()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    logger.error("Realtime outbox dispatch pass failed", error)
+                }
                 delay(config.pollIntervalMillis)
             }
         }
@@ -103,7 +110,9 @@ class OutboxDispatcher(
     }
 
     override fun close() {
-        runBlocking { job?.cancelAndJoin() }
+        if (!closed.compareAndSet(false, true)) return
+        job?.cancel()
+        runBlocking { job?.join() }
         scope.cancel()
     }
 

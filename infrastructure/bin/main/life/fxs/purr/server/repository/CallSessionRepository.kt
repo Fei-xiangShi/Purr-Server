@@ -75,12 +75,39 @@ class CallSessionRepository : CallSessionStore {
         return call
     }
 
-    override fun endIfActive(callId: String, endedAtEpochMillis: Long): EndCallResolution? {
+    override fun activateIfWaiting(callId: String, connectedAtEpochMillis: Long): CallRecord? {
+        transaction {
+            CallSessionsTable.update(
+                where = {
+                    (CallSessionsTable.callId eq callId) and
+                        (CallSessionsTable.callState eq CallState.WAITING.wireValue) and
+                        CallSessionsTable.connectedAtEpochMillis.isNull()
+                },
+            ) {
+                it[callState] = CallState.ACTIVE.wireValue
+                it[CallSessionsTable.connectedAtEpochMillis] = connectedAtEpochMillis
+                it[updatedAtEpochMillis] = connectedAtEpochMillis
+            }
+        }
+        return find(callId)
+    }
+
+    override fun endIfWaiting(callId: String, endedAtEpochMillis: Long): EndCallResolution? =
+        endIfStateMatches(callId, endedAtEpochMillis, listOf(CallState.WAITING.wireValue))
+
+    override fun endIfOpen(callId: String, endedAtEpochMillis: Long): EndCallResolution? =
+        endIfStateMatches(callId, endedAtEpochMillis, openCallStates)
+
+    private fun endIfStateMatches(
+        callId: String,
+        endedAtEpochMillis: Long,
+        expectedStates: List<String>,
+    ): EndCallResolution? {
         val updatedRows = transaction {
             CallSessionsTable.update(
                 where = {
                     (CallSessionsTable.callId eq callId) and
-                        (CallSessionsTable.callState eq CallState.ACTIVE.wireValue)
+                        (CallSessionsTable.callState inList expectedStates)
                 },
             ) {
                 it[callState] = CallState.ENDED.wireValue
@@ -124,12 +151,13 @@ class CallSessionRepository : CallSessionStore {
         val endedCalls =
             (CallSessionsTable.pairId eq pairId) and
                 (CallSessionsTable.callState eq CallState.ENDED.wireValue) and
-                CallSessionsTable.endedAtEpochMillis.isNotNull()
+                CallSessionsTable.endedAtEpochMillis.isNotNull() and
+                CallSessionsTable.connectedAtEpochMillis.isNotNull()
         val condition = cursor?.let {
             endedCalls and (
-                (CallSessionsTable.startedAtEpochMillis less it.startedAtEpochMillis) or
+                (CallSessionsTable.connectedAtEpochMillis less it.startedAtEpochMillis) or
                     (
-                        (CallSessionsTable.startedAtEpochMillis eq it.startedAtEpochMillis) and
+                        (CallSessionsTable.connectedAtEpochMillis eq it.startedAtEpochMillis) and
                             (CallSessionsTable.callId less it.callId)
                         )
                 )
@@ -137,7 +165,7 @@ class CallSessionRepository : CallSessionStore {
         CallSessionsTable.selectAll()
             .where { condition }
             .orderBy(
-                CallSessionsTable.startedAtEpochMillis to SortOrder.DESC,
+                CallSessionsTable.connectedAtEpochMillis to SortOrder.DESC,
                 CallSessionsTable.callId to SortOrder.DESC,
             )
             .limit(limit)
@@ -243,6 +271,7 @@ class CallSessionRepository : CallSessionStore {
         recordingLastRecoveryAtEpochMillis = this[CallSessionsTable.recordingLastRecoveryAtEpochMillis],
         recordingErrorMessage = this[CallSessionsTable.recordingErrorMessage],
         endedAtEpochMillis = this[CallSessionsTable.endedAtEpochMillis],
+        connectedAtEpochMillis = this[CallSessionsTable.connectedAtEpochMillis],
     )
 
     private fun findActiveByPairInCurrentTransaction(pairId: String): CallRecord? =
@@ -255,12 +284,13 @@ class CallSessionRepository : CallSessionStore {
         CallSessionsTable.insert {
             it[callId] = call.callId
             it[pairId] = call.pairId
-            it[activePairId] = call.pairId.takeIf { call.state == CallState.ACTIVE }
+            it[activePairId] = call.pairId.takeIf { call.state in openCallStatesAsEnums }
             it[roomName] = call.roomName
             it[createdByUserId] = call.createdByUserId
             it[startedAtEpochMillis] = call.startedAtEpochMillis
             it[updatedAtEpochMillis] = call.updatedAtEpochMillis
             it[endedAtEpochMillis] = call.endedAtEpochMillis
+            it[connectedAtEpochMillis] = call.connectedAtEpochMillis
             it[callState] = call.state.wireValue
             it[recordingStatus] = call.recordingStatus.wireValue
             it[recordingId] = call.recordingId
@@ -280,6 +310,8 @@ class CallSessionRepository : CallSessionStore {
             RecordingStatus.STARTING.wireValue,
             RecordingStatus.STOPPING.wireValue,
         )
+        val openCallStates = listOf(CallState.WAITING.wireValue, CallState.ACTIVE.wireValue)
+        val openCallStatesAsEnums = setOf(CallState.WAITING, CallState.ACTIVE)
         const val MAX_RECORDING_ERROR_LENGTH = 2_048
     }
 }

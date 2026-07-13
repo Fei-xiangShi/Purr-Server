@@ -3,6 +3,7 @@ package life.fxs.purr.server.livekit
 import java.time.Instant
 import life.fxs.purr.server.application.ApplicationError
 import life.fxs.purr.server.application.ApplicationException
+import life.fxs.purr.server.application.call.CallLifecycleService
 import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.application.port.ProviderRecordingResult
 import life.fxs.purr.server.application.port.RecordingController
@@ -26,6 +27,7 @@ class LiveKitWebhookService(
     private val pairBondRepository: PairBondRepository,
     private val recordingConfig: RecordingConfig,
     private val recordingController: RecordingController,
+    private val callLifecycleService: CallLifecycleService,
     private val roomParticipantService: RoomParticipantService? = null,
     private val nowProvider: () -> Instant = Instant::now,
 ) {
@@ -60,13 +62,13 @@ class LiveKitWebhookService(
         val roomName = event.room.name.takeIf { it.isNotBlank() } ?: return
         val call = callSessionRepository.findByRoomName(roomName) ?: return
         when (event.event) {
-            PARTICIPANT_JOINED_EVENT -> maybeStartRecordingWhenReady(event, call)
+            PARTICIPANT_JOINED_EVENT -> maybeStartCallWhenReady(event, call)
             PARTICIPANT_LEFT_EVENT -> maybeEndCallWhenRoomEmpty(event, call)
             ROOM_FINISHED_EVENT -> endCall(call)
         }
     }
 
-    private fun maybeStartRecordingWhenReady(event: LivekitWebhook.WebhookEvent, call: CallRecord) {
+    private fun maybeStartCallWhenReady(event: LivekitWebhook.WebhookEvent, call: CallRecord) {
         if (!event.hasParticipant()) {
             return
         }
@@ -82,6 +84,10 @@ class LiveKitWebhookService(
         if (activeParticipantCount < MIN_PARTICIPANTS_TO_RECORD) {
             return
         }
+        val activeCall = callSessionRepository.activateIfWaiting(
+            callId = call.callId,
+            connectedAtEpochMillis = nowProvider().toEpochMilli(),
+        )?.takeIf { it.state == CallState.ACTIVE } ?: return
         val pair = pairBondRepository.findByPairId(call.pairId) ?: return
         if (!callRecordingConsentRepository.hasAllConsents(
                 callId = call.callId,
@@ -92,7 +98,7 @@ class LiveKitWebhookService(
             return
         }
         val claimed = callSessionRepository.claimRecordingStart(
-            callId = call.callId,
+            callId = activeCall.callId,
             updatedAtEpochMillis = nowProvider().toEpochMilli(),
         ) ?: return
         try {
@@ -128,7 +134,7 @@ class LiveKitWebhookService(
         // A room becoming empty is the call boundary. Releasing the active slot
         // guarantees that a later call receives a new call id and room.
         maybeStopRecording(call)
-        callSessionRepository.endIfActive(
+        callLifecycleService.endOpenCall(
             callId = call.callId,
             endedAtEpochMillis = nowProvider().toEpochMilli(),
         )
