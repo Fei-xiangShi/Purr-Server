@@ -14,6 +14,7 @@ class InMemoryRecordingController(
 ) : RecordingController {
     private val recordingStarts = ConcurrentHashMap<String, Long>()
     private val recordings = ConcurrentHashMap<String, ProviderRecordingResult>()
+    private val operationResults = ConcurrentHashMap<String, ProviderRecordingResult>()
 
     override fun startRecording(callId: String, roomName: String): ProviderRecordingResult {
         if (!config.enabled) {
@@ -29,6 +30,14 @@ class InMemoryRecordingController(
             objectKey = "${config.filePrefix.trimEnd('/')}/$callId/$now.ogg",
             startedAtEpochMillis = now,
         ).also { recordings[recordingId] = it }
+    }
+
+    override fun startRecording(
+        callId: String,
+        roomName: String,
+        operationId: String,
+    ): ProviderRecordingResult = operationResults[operationId] ?: startRecording(callId, roomName).also {
+        operationResults[operationId] = it
     }
 
     override fun stopRecording(
@@ -53,5 +62,22 @@ class InMemoryRecordingController(
         }
     }
 
+    override fun stopRecording(
+        callId: String,
+        roomName: String,
+        currentRecordingId: String?,
+        operationId: String,
+    ): ProviderRecordingResult = operationResults[operationId] ?: stopRecording(
+        callId,
+        roomName,
+        currentRecordingId,
+    ).also { operationResults[operationId] = it }
+
     override fun getRecording(recordingId: String): ProviderRecordingResult? = recordings[recordingId]
+
+    override fun findRecordingForOperation(
+        callId: String,
+        roomName: String,
+        operationId: String,
+    ): ProviderRecordingResult? = operationResults[operationId]
 }

@@ -10,6 +10,7 @@ data class PurrServerConfig(
     val outbox: OutboxConfig,
     val rateLimit: AuthRateLimitConfig,
     val database: DatabaseConfig,
+    val callReconciliation: CallReconciliationConfig = CallReconciliationConfig(),
 )
 
 enum class RuntimeEnvironment {
@@ -99,6 +100,14 @@ data class OutboxConfig(
     val maxAttempts: Int,
     val retryBaseSeconds: Long,
     val retryMaxSeconds: Long,
+)
+
+data class CallReconciliationConfig(
+    val enabled: Boolean = false,
+    val intervalSeconds: Long = 10,
+    val waitingTtlSeconds: Long = 120,
+    val emptyRoomGraceSeconds: Long = 15,
+    val batchSize: Int = 100,
 )
 
 data class AuthRateLimitConfig(

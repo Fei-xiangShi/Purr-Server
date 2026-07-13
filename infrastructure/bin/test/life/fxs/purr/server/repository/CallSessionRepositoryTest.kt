@@ -2,6 +2,7 @@ package life.fxs.purr.server.repository
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import life.fxs.purr.server.application.model.CallHistoryCursor
 import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.config.DatabaseConfig
@@ -41,6 +42,38 @@ class CallSessionRepositoryTest {
 
             assertEquals(listOf("call-new"), firstPage.map { it.callId })
             assertEquals(listOf("call-old"), secondPage.map { it.callId })
+        } finally {
+            (resources.dataSource as? AutoCloseable)?.close()
+        }
+    }
+
+    @Test
+    fun `room empty observation is persisted and only cleared while call is open`() {
+        val resources = DatabaseFactory(
+            DatabaseConfig(
+                jdbcUrl = "jdbc:h2:mem:call-reconciliation-${System.nanoTime()};MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+                driverClassName = "org.h2.Driver",
+                username = "sa",
+                password = "",
+                maximumPoolSize = 2,
+            ),
+        ).connect()
+
+        try {
+            val users = UserRepository()
+            users.upsert("user-a", "user-a", "pass-a", "A", null)
+            users.upsert("user-b", "user-b", "pass-b", "B", null)
+            PairBondRepository().upsert("pair-1", "user-a", "user-b", 1L)
+            val repository = CallSessionRepository()
+            repository.upsert(call("call-active", 1_000L, null))
+
+            assertEquals(1_100L, repository.observeRoomEmpty("call-active", 1_100L)
+                ?.roomEmptySinceEpochMillis)
+            assertEquals(1_100L, repository.observeRoomEmpty("call-active", 1_200L)
+                ?.roomEmptySinceEpochMillis)
+            assertEquals(true, repository.clearRoomEmptyObservation("call-active"))
+            assertEquals(null, repository.find("call-active")?.roomEmptySinceEpochMillis)
+            assertNotNull(repository.findOpenCalls(10).single())
         } finally {
             (resources.dataSource as? AutoCloseable)?.close()
         }

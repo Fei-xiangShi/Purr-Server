@@ -24,13 +24,17 @@ import life.fxs.purr.server.livekit.LiveKitWebhookService
 import life.fxs.purr.server.livekit.RecordingRecoveryService
 import life.fxs.purr.server.livekit.RoomParticipantService
 import life.fxs.purr.server.livekit.InMemoryRecordingController
+import life.fxs.purr.server.recording.RecordingCommandDispatcher
+import life.fxs.purr.server.call.CallRoomReconciliationWorker
 import life.fxs.purr.server.repository.AuthSessionRepository
 import life.fxs.purr.server.repository.CallSessionRepository
 import life.fxs.purr.server.repository.CallRecordingRepository
 import life.fxs.purr.server.repository.CallRecordingConsentRepository
+import life.fxs.purr.server.repository.RecordingCommandRepository
 import life.fxs.purr.server.repository.PairBondRepository
 import life.fxs.purr.server.repository.UserRepository
 import life.fxs.purr.server.repository.PresenceRepository
+import life.fxs.purr.server.repository.WebhookInboxRepository
 import life.fxs.purr.server.realtime.RealtimeHub
 import life.fxs.purr.server.realtime.BrokeredRealtimeEventPublisher
 import life.fxs.purr.server.realtime.OutboxDispatcher
@@ -45,9 +49,13 @@ import life.fxs.purr.server.ratelimit.AuthRateLimiter
 import life.fxs.purr.server.ratelimit.AuthRateLimiterFactory
 import life.fxs.purr.server.redis.RedisClientResources
 import life.fxs.purr.server.seed.BootstrapSeeder
+import java.util.concurrent.atomic.AtomicBoolean
 import life.fxs.purr.server.application.call.CallAccessPolicy
 import life.fxs.purr.server.application.call.CallSessionService
 import life.fxs.purr.server.application.call.CallLifecycleService
+import life.fxs.purr.server.application.call.CallRoomLifecycleService
+import life.fxs.purr.server.application.call.CallRoomReconciliationService
+import life.fxs.purr.server.application.call.CallRecordingWebhookService
 import life.fxs.purr.server.application.call.CallHistoryQueryService
 import life.fxs.purr.server.application.call.RecordingCommandService
 import life.fxs.purr.server.application.call.RecordingQueryService
@@ -77,15 +85,30 @@ data class ServerDependencies(
     private val avatarObjectStoreResource: AutoCloseable,
     private val recordingRecoveryService: RecordingRecoveryService,
     private val recordingRetentionService: RecordingRetentionService,
+    private val recordingCommandDispatcher: RecordingCommandDispatcher,
+    private val callRoomReconciliationWorker: CallRoomReconciliationWorker?,
     private val outboxDispatcher: OutboxDispatcher,
     private val redisResources: RedisClientResources,
 ) : AutoCloseable {
+    private val closed = AtomicBoolean(false)
+
     override fun close() {
+        if (!closed.compareAndSet(false, true)) return
         var failure: Throwable? = null
+        try {
+            callRoomReconciliationWorker?.close()
+        } catch (error: Throwable) {
+            failure = error
+        }
+        try {
+            recordingCommandDispatcher.close()
+        } catch (error: Throwable) {
+            failure?.addSuppressed(error) ?: run { failure = error }
+        }
         try {
             outboxDispatcher.close()
         } catch (error: Throwable) {
-            failure = error
+            failure?.addSuppressed(error) ?: run { failure = error }
         }
         try {
             recordingRetentionService.close()
@@ -147,6 +170,8 @@ object ServerDependenciesFactory {
         var avatarObjectStoreResource: AutoCloseable? = null
         var recordingRecoveryService: RecordingRecoveryService? = null
         var recordingRetentionService: RecordingRetentionService? = null
+        var recordingCommandDispatcher: RecordingCommandDispatcher? = null
+        var callRoomReconciliationWorker: CallRoomReconciliationWorker? = null
         var outboxDispatcher: OutboxDispatcher? = null
 
         try {
@@ -155,6 +180,8 @@ object ServerDependenciesFactory {
             val authSessionRepository = AuthSessionRepository()
             val callSessionRepository = CallSessionRepository()
             val callRecordingRepository = CallRecordingRepository()
+            val webhookInboxRepository = WebhookInboxRepository()
+            val recordingCommandRepository = RecordingCommandRepository(callRecordingRepository)
             val callRecordingConsentRepository = CallRecordingConsentRepository()
             val presenceRepository = PresenceRepository()
             val applicationTransaction = databaseResources.applicationTransaction
@@ -217,6 +244,13 @@ object ServerDependenciesFactory {
                 )
             }
             val recordingController = recordingAdapters.controller
+            val commandDispatcher = RecordingCommandDispatcher(
+                config = config.outbox,
+                repository = recordingCommandRepository,
+                callSessionStore = callSessionRepository,
+                recordingController = recordingController,
+            ).also { it.start() }
+            recordingCommandDispatcher = commandDispatcher
             val recordingDownloadUrlProvider = S3RecordingDownloadUrlProvider(config.recording)
                 .also { recordingDownloadResource = it }
             val recordingObjectStore = S3RecordingObjectStore(config.recording)
@@ -248,9 +282,12 @@ object ServerDependenciesFactory {
                 callSessionStore = callSessionRepository,
                 callRecordingStore = callRecordingRepository,
                 recordingConsentStore = callRecordingConsentRepository,
-                recordingController = recordingController,
+                recordingController = null,
                 recordingEnabled = config.recording.enabled,
                 consentPolicyVersion = config.recording.consentPolicyVersion,
+                recordingCommandStore = recordingCommandRepository,
+                transaction = applicationTransaction,
+                recordingCommandProcessor = commandDispatcher,
             )
             val callSessionService = CallSessionService(
                 pairService = pairService,
@@ -270,6 +307,47 @@ object ServerDependenciesFactory {
                 transaction = applicationTransaction,
                 realtimeOutbox = outboxRepository,
             )
+            val roomParticipantReader = recordingAdapters.participantService
+                ?: config.callReconciliation.enabled.takeIf { it }
+                    ?.let { LiveKitRoomParticipantService(config.liveKit) }
+            val callRoomLifecycleService = CallRoomLifecycleService(
+                callSessionStore = callSessionRepository,
+                callRecordingStore = callRecordingRepository,
+                recordingConsentStore = callRecordingConsentRepository,
+                pairStore = pairBondRepository,
+                recordingController = null,
+                callLifecycleService = callLifecycleService,
+                recordingEnabled = config.recording.enabled,
+                consentPolicyVersion = config.recording.consentPolicyVersion,
+                participantReader = roomParticipantReader,
+                recordingCommandStore = recordingCommandRepository,
+                transaction = applicationTransaction,
+                recordingCommandWakeup = commandDispatcher,
+                recordingCommandProcessor = commandDispatcher,
+            )
+            val callRecordingWebhookService = CallRecordingWebhookService(
+                callSessionStore = callSessionRepository,
+                callRecordingStore = callRecordingRepository,
+                recordingController = null,
+                recordingCommandStore = recordingCommandRepository,
+                transaction = applicationTransaction,
+                recordingCommandWakeup = commandDispatcher,
+            )
+            val reconciliationWorker = roomParticipantReader?.let { reader ->
+                CallRoomReconciliationWorker(
+                    config = config.callReconciliation,
+                    service = CallRoomReconciliationService(
+                        store = callSessionRepository,
+                        participantReader = reader,
+                        roomEventHandler = callRoomLifecycleService,
+                        waitingCallTerminator = callLifecycleService,
+                        waitingTtlMillis = config.callReconciliation.waitingTtlSeconds * 1_000L,
+                        emptyRoomGraceMillis = config.callReconciliation.emptyRoomGraceSeconds * 1_000L,
+                        batchSize = config.callReconciliation.batchSize,
+                    ),
+                ).also { it.start() }
+            }
+            callRoomReconciliationWorker = reconciliationWorker
             val recordingQueryService = RecordingQueryService(
                 callAccessPolicy = callAccessPolicy,
                 callRecordingStore = callRecordingRepository,
@@ -281,14 +359,9 @@ object ServerDependenciesFactory {
             )
             val liveKitWebhookService = LiveKitWebhookService(
                 liveKitConfig = config.liveKit,
-                callSessionRepository = callSessionRepository,
-                callRecordingRepository = callRecordingRepository,
-                callRecordingConsentRepository = callRecordingConsentRepository,
-                pairBondRepository = pairBondRepository,
-                recordingConfig = config.recording,
-                recordingController = recordingController,
-                callLifecycleService = callLifecycleService,
-                roomParticipantService = recordingAdapters.participantService,
+                callRoomLifecycleService = callRoomLifecycleService,
+                callRecordingWebhookService = callRecordingWebhookService,
+                webhookInboxStore = webhookInboxRepository,
             )
             val recoveryService = RecordingRecoveryService(
                 config = config.recording,
@@ -333,10 +406,18 @@ object ServerDependenciesFactory {
                 avatarObjectStoreResource = avatarObjectStore,
                 recordingRecoveryService = recoveryService,
                 recordingRetentionService = retentionService,
+                recordingCommandDispatcher = commandDispatcher,
+                callRoomReconciliationWorker = reconciliationWorker,
                 outboxDispatcher = dispatcher,
                 redisResources = redisResources,
             )
         } catch (error: Throwable) {
+            runCatching { callRoomReconciliationWorker?.close() }
+                .exceptionOrNull()
+                ?.let(error::addSuppressed)
+            runCatching { recordingCommandDispatcher?.close() }
+                .exceptionOrNull()
+                ?.let(error::addSuppressed)
             runCatching { outboxDispatcher?.close() }
                 .exceptionOrNull()
                 ?.let(error::addSuppressed)

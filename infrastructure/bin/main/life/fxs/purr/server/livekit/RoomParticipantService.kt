@@ -2,16 +2,13 @@ package life.fxs.purr.server.livekit
 
 import life.fxs.purr.server.application.ApplicationError
 import life.fxs.purr.server.application.ApplicationException
+import life.fxs.purr.server.application.port.CallRoomParticipantReader
 import io.livekit.server.RoomServiceClient
 import life.fxs.purr.server.config.LiveKitConfig
 import livekit.LivekitModels
 import retrofit2.Call
 
-interface RoomParticipantService {
-    fun countActiveNonEgressParticipants(roomName: String): Int
-
-    fun countPresentNonEgressParticipants(roomName: String): Int
-}
+interface RoomParticipantService : CallRoomParticipantReader
 
 class LiveKitRoomParticipantService(
     private val liveKitConfig: LiveKitConfig,
@@ -29,6 +26,18 @@ class LiveKitRoomParticipantService(
 
     override fun countPresentNonEgressParticipants(roomName: String): Int = listRelevantParticipants(roomName)
         .count { it.state != LivekitModels.ParticipantInfo.State.DISCONNECTED }
+
+    override fun activeNonEgressParticipantIdentities(roomName: String): Set<String> = listRelevantParticipants(roomName)
+        .asSequence()
+        .filter { it.state == LivekitModels.ParticipantInfo.State.ACTIVE }
+        .mapNotNull { it.identity.takeIf(String::isNotBlank) }
+        .toSet()
+
+    override fun presentNonEgressParticipantIdentities(roomName: String): Set<String> = listRelevantParticipants(roomName)
+        .asSequence()
+        .filter { it.state != LivekitModels.ParticipantInfo.State.DISCONNECTED }
+        .mapNotNull { it.identity.takeIf(String::isNotBlank) }
+        .toSet()
 
     private fun listRelevantParticipants(roomName: String): List<LivekitModels.ParticipantInfo> = roomClient.listParticipants(roomName)
         .executeOrThrow("list participants")

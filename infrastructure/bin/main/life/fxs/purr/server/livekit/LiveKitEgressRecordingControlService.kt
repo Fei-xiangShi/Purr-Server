@@ -6,6 +6,7 @@ import io.livekit.server.RoomServiceClient
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.util.concurrent.ConcurrentHashMap
 import life.fxs.purr.server.application.ApplicationError
 import life.fxs.purr.server.application.ApplicationException
 import life.fxs.purr.server.application.port.ProviderRecordingResult
@@ -21,6 +22,8 @@ class LiveKitEgressRecordingControlService(
     private val recordingConfig: RecordingConfig,
     private val nowProvider: () -> Instant = Instant::now,
 ) : RecordingController {
+    /** Fast-path cache; cross-process reconciliation uses the deterministic output key below. */
+    private val operationResults = ConcurrentHashMap<String, ProviderRecordingResult>()
     private val client: EgressServiceClient by lazy {
         EgressServiceClient.createClient(
             liveKitConfig.httpUrl,
@@ -37,10 +40,17 @@ class LiveKitEgressRecordingControlService(
     }
 
     override fun startRecording(callId: String, roomName: String): ProviderRecordingResult {
-        ensureEnabled()
-        ensureRoomExists(roomName)
         val now = nowProvider()
         val objectKey = buildObjectKey(callId, now)
+        return startRecordingWithObjectKey(roomName, objectKey)
+    }
+
+    private fun startRecordingWithObjectKey(
+        roomName: String,
+        objectKey: String,
+    ): ProviderRecordingResult {
+        ensureEnabled()
+        ensureRoomExists(roomName)
         val response = client.startRoomCompositeEgress(
             roomName,
             createFileOutput(objectKey),
@@ -56,6 +66,17 @@ class LiveKitEgressRecordingControlService(
             knownObjectKey = objectKey,
         )
     }
+
+    override fun startRecording(
+        callId: String,
+        roomName: String,
+        operationId: String,
+    ): ProviderRecordingResult = operationResults[operationId]
+        ?: findRecordingForOperation(callId, roomName, operationId)
+        ?: startRecordingWithObjectKey(
+            roomName = roomName,
+            objectKey = buildOperationObjectKey(callId, operationId),
+        ).also { operationResults[operationId] = it }
 
     override fun stopRecording(
         callId: String,
@@ -75,12 +96,37 @@ class LiveKitEgressRecordingControlService(
         }
     }
 
+    override fun stopRecording(
+        callId: String,
+        roomName: String,
+        currentRecordingId: String?,
+        operationId: String,
+    ): ProviderRecordingResult = operationResults[operationId] ?: stopRecording(
+        callId,
+        roomName,
+        currentRecordingId,
+    ).also { operationResults[operationId] = it }
+
     override fun getRecording(recordingId: String): ProviderRecordingResult? {
         ensureEnabled()
         return client.listEgress("", recordingId, null)
             .executeOrThrow("get recording status")
             .firstOrNull { it.egressId == recordingId }
             ?.toRecordingResult()
+    }
+
+    override fun findRecordingForOperation(
+        callId: String,
+        roomName: String,
+        operationId: String,
+    ): ProviderRecordingResult? {
+        ensureEnabled()
+        val objectKey = buildOperationObjectKey(callId, operationId)
+        return client.listEgress(roomName, "", null)
+            .executeOrThrow("reconcile recording start")
+            .firstOrNull { it.targetsObjectKey(objectKey) }
+            ?.toRecordingResult(knownObjectKey = objectKey)
+            ?.also { operationResults[operationId] = it }
     }
 
     private fun ensureRoomExists(roomName: String) {
@@ -111,6 +157,10 @@ class LiveKitEgressRecordingControlService(
     private fun buildObjectKey(callId: String, now: Instant): String {
         val timestamp = timestampFormatter.format(now)
         return "${recordingConfig.filePrefix.trimEnd('/')}/$callId/$timestamp.ogg"
+    }
+
+    private fun buildOperationObjectKey(callId: String, operationId: String): String {
+        return recordingOperationObjectKey(recordingConfig.filePrefix, callId, operationId)
     }
 
     private fun ensureEnabled() {
@@ -145,3 +195,23 @@ class LiveKitEgressRecordingControlService(
                 .withZone(ZoneOffset.UTC)
     }
 }
+
+internal fun recordingOperationObjectKey(
+    filePrefix: String,
+    callId: String,
+    operationId: String,
+): String {
+    val safeOperationId = operationId.replace(UNSAFE_OBJECT_KEY_CHARACTER, "_")
+    return "${filePrefix.trimEnd('/')}/$callId/$safeOperationId.ogg"
+}
+
+@Suppress("DEPRECATION")
+internal fun LivekitEgress.EgressInfo.targetsObjectKey(objectKey: String): Boolean {
+    if (fileResultsList.any { it.filename == objectKey }) return true
+    if (!hasRoomComposite()) return false
+    val request = roomComposite
+    return (request.hasFile() && request.file.filepath == objectKey) ||
+        request.fileOutputsList.any { it.filepath == objectKey }
+}
+
+private val UNSAFE_OBJECT_KEY_CHARACTER = Regex("[^A-Za-z0-9._-]")

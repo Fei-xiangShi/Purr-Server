@@ -236,6 +236,19 @@ class PurrRoutesTest {
     }
 
     @Test
+    fun `livekit webhook rejects oversized payload before signature processing`() = testApplication {
+        val body = "x".repeat(1_048_577)
+        val response = client.post("/webhooks/livekit") {
+            contentType(ContentType.Application.Json)
+            header("Authorization", signLiveKitWebhook(body))
+            setBody(body)
+        }
+
+        assertEquals(HttpStatusCode(413, "Payload Too Large"), response.status)
+        assertTrue(response.bodyAsText().contains("payload_too_large"))
+    }
+
+    @Test
     fun `recording starts when second participant joins and stops after everyone leaves`() = testApplication {
         val userAToken = client.login("user-a", "pass-a")
         val userBToken = client.login("user-b", "pass-b")
