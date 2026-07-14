@@ -260,13 +260,13 @@ class PurrRoutesTest {
         }
         assertEquals(HttpStatusCode.OK, sessionA.status)
         val sessionABody = sessionA.bodyAsText()
-        assertTrue(sessionABody.contains("\"pairId\":\"pair-demo\""))
+        assertTrue(sessionABody.contains("\"pairId\":\"pair-demo\""), "first session pair")
 
         val callId = Regex("\\\"callId\\\":\\\"([^\\\"]+)\\\"").find(sessionABody)?.groupValues?.get(1)
         val roomName = Regex("\\\"roomName\\\":\\\"([^\\\"]+)\\\"").find(sessionABody)?.groupValues?.get(1)
-        assertTrue(!callId.isNullOrBlank())
-        assertTrue(!roomName.isNullOrBlank())
-        assertTrue(sessionABody.contains("\"participantIdentity\":\"user-a-$callId\""))
+        assertTrue(!callId.isNullOrBlank(), "first session call id")
+        assertTrue(!roomName.isNullOrBlank(), "first session room")
+        assertTrue(sessionABody.contains("\"participantIdentity\":\"user-a-$callId\""), "caller identity")
 
         val sessionB = client.post("/calls/session") {
             header("Authorization", "Bearer $userBToken")
@@ -275,15 +275,15 @@ class PurrRoutesTest {
         }
         val sessionBBody = sessionB.bodyAsText()
         assertEquals(HttpStatusCode.OK, sessionB.status)
-        assertTrue(sessionBBody.contains("\"callId\":\"$callId\""))
-        assertTrue(sessionBBody.contains("\"roomName\":\"$roomName\""))
-        assertTrue(sessionBBody.contains("\"participantIdentity\":\"user-b-$callId\""))
+        assertTrue(sessionBBody.contains("\"callId\":\"$callId\""), "callee joins call")
+        assertTrue(sessionBBody.contains("\"roomName\":\"$roomName\""), "callee joins room")
+        assertTrue(sessionBBody.contains("\"participantIdentity\":\"user-b-$callId\""), "callee identity")
 
         val initialCallStatus = client.get("/calls/$callId") {
             header("Authorization", "Bearer $userBToken")
         }
         assertEquals(HttpStatusCode.OK, initialCallStatus.status)
-        assertTrue(initialCallStatus.bodyAsText().contains("\"recordingStatus\":\"idle\""))
+        assertTrue(initialCallStatus.bodyAsText().contains("\"recordingStatus\":\"idle\""), "initial recording idle")
 
         client.postLiveKitWebhook(
             body = """
@@ -304,8 +304,8 @@ class PurrRoutesTest {
             header("Authorization", "Bearer $userBToken")
         }
         assertEquals(HttpStatusCode.OK, afterFirstJoin.status)
-        assertTrue(afterFirstJoin.bodyAsText().contains("\"state\":\"waiting\""))
-        assertTrue(afterFirstJoin.bodyAsText().contains("\"recordingStatus\":\"idle\""))
+        assertTrue(afterFirstJoin.bodyAsText().contains("\"state\":\"waiting\""), "waiting after first join")
+        assertTrue(afterFirstJoin.bodyAsText().contains("\"recordingStatus\":\"idle\""), "idle after first join")
 
         client.postLiveKitWebhook(
             body = """
@@ -325,11 +325,12 @@ class PurrRoutesTest {
         val afterSecondJoin = client.get("/calls/$callId") {
             header("Authorization", "Bearer $userBToken")
         }
+        val afterSecondJoinBody = afterSecondJoin.bodyAsText()
         assertEquals(HttpStatusCode.OK, afterSecondJoin.status)
-        assertTrue(afterSecondJoin.bodyAsText().contains("\"state\":\"active\""))
-        assertTrue(afterSecondJoin.bodyAsText().contains("\"startedAtEpochMillis\":"))
-        assertTrue(afterSecondJoin.bodyAsText().contains("\"durationMillis\":"))
-        assertTrue(afterSecondJoin.bodyAsText().contains("\"recordingStatus\":\"recording\""))
+        assertTrue(afterSecondJoinBody.contains("\"state\":\"active\""), "active after second join: $afterSecondJoinBody")
+        assertTrue(afterSecondJoinBody.contains("\"startedAtEpochMillis\":"), "started timestamp after join: $afterSecondJoinBody")
+        assertTrue(afterSecondJoinBody.contains("\"durationMillis\":"), "duration after join: $afterSecondJoinBody")
+        assertTrue(afterSecondJoinBody.contains("\"recordingStatus\":\"recording\""), "recording after second join: $afterSecondJoinBody")
 
         client.postLiveKitWebhook(
             body = """
@@ -350,7 +351,7 @@ class PurrRoutesTest {
             header("Authorization", "Bearer $userBToken")
         }
         assertEquals(HttpStatusCode.OK, afterFirstLeave.status)
-        assertTrue(afterFirstLeave.bodyAsText().contains("\"recordingStatus\":\"recording\""))
+        assertTrue(afterFirstLeave.bodyAsText().contains("\"recordingStatus\":\"recording\""), "recording after first leave")
 
         client.postLiveKitWebhook(
             body = """
@@ -371,18 +372,18 @@ class PurrRoutesTest {
             header("Authorization", "Bearer $userBToken")
         }
         assertEquals(HttpStatusCode.OK, afterEveryoneLeaves.status)
-        assertTrue(afterEveryoneLeaves.bodyAsText().contains("\"state\":\"ended\""))
-        assertTrue(afterEveryoneLeaves.bodyAsText().contains("\"recordingStatus\":\"stopped\""))
+        assertTrue(afterEveryoneLeaves.bodyAsText().contains("\"state\":\"ended\""), "ended after all leave")
+        assertTrue(afterEveryoneLeaves.bodyAsText().contains("\"recordingStatus\":\"stopped\""), "recording stopped after all leave")
 
         val recordings = client.get("/calls/$callId/recordings") {
             header("Authorization", "Bearer $userBToken")
         }
         val recordingsBody = recordings.bodyAsText()
         assertEquals(HttpStatusCode.OK, recordings.status)
-        assertTrue(recordingsBody.contains("\"status\":\"stopped\""))
-        assertTrue(recordingsBody.contains("\"downloadAvailable\":true"))
-        assertTrue(!recordingsBody.contains("objectKey"))
-        assertTrue(recordingsBody.contains("\"durationMillis\":"))
+        assertTrue(recordingsBody.contains("\"status\":\"stopped\""), "recording history stopped")
+        assertTrue(recordingsBody.contains("\"downloadAvailable\":true"), "recording download available")
+        assertTrue(!recordingsBody.contains("objectKey"), "recording key hidden")
+        assertTrue(recordingsBody.contains("\"durationMillis\":"), "recording duration")
 
         val recordingId = Regex("\\\"recordingId\\\":\\\"([^\\\"]+)\\\"")
             .find(recordingsBody)
@@ -394,8 +395,8 @@ class PurrRoutesTest {
         }
         assertEquals(HttpStatusCode.OK, download.status)
         assertEquals("no-store", download.headers[HttpHeaders.CacheControl])
-        assertTrue(download.bodyAsText().contains("\"url\":\"http://localhost:9000/"))
-        assertTrue(download.bodyAsText().contains("X-Amz-Signature"))
+        assertTrue(download.bodyAsText().contains("\"url\":\"http://localhost:9000/"), "download URL")
+        assertTrue(download.bodyAsText().contains("X-Amz-Signature"), "signed download URL")
 
         val nextSessionA = client.post("/calls/session") {
             header("Authorization", "Bearer $userAToken")
@@ -423,7 +424,7 @@ class PurrRoutesTest {
             setBody("""{"pairId":"pair-demo","recordingConsent":true}""")
         }
         assertEquals(HttpStatusCode.OK, nextSessionB.status)
-        assertTrue(nextSessionB.bodyAsText().contains("\"callId\":\"$nextCallId\""))
+        assertTrue(nextSessionB.bodyAsText().contains("\"callId\":\"$nextCallId\""), "second call join")
 
         listOf(
             Triple("a-join", 1, "user-a-$nextCallId"),
@@ -462,9 +463,9 @@ class PurrRoutesTest {
         assertEquals(HttpStatusCode.OK, firstPage.status)
         val firstPageBody = firstPage.bodyAsText()
         assertEquals(1, Regex("\"callId\"").findAll(firstPageBody).count())
-        assertTrue(firstPageBody.contains("\"startedAtEpochMillis\":"))
-        assertTrue(firstPageBody.contains("\"durationMillis\":"))
-        assertTrue(!firstPageBody.contains("recordingId"))
+        assertTrue(firstPageBody.contains("\"startedAtEpochMillis\":"), "history start timestamp")
+        assertTrue(firstPageBody.contains("\"durationMillis\":"), "history duration")
+        assertTrue(!firstPageBody.contains("recordingId"), "history hides recording id")
         val nextCursor = Regex("\\\"nextCursor\\\":\\\"([^\\\"]+)")
             .find(firstPageBody)
             ?.groupValues
@@ -675,6 +676,79 @@ class PurrRoutesTest {
 
         assertEquals(HttpStatusCode.BadRequest, response.status)
         assertTrue(response.bodyAsText().contains("Call reconnection is not supported"))
+    }
+
+    @Test
+    fun `history calendar day detail and telemetry form one production query flow`() = testApplication {
+        val token = client.login("user-a", "pass-a")
+        val session = client.post("/calls/session") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"pairId":"pair-demo","recordingConsent":true}""")
+        }
+        assertEquals(HttpStatusCode.OK, session.status)
+        val callId = Regex("\\\"callId\\\":\\\"([^\\\"]+)\\\"")
+            .find(session.bodyAsText())
+            ?.groupValues
+            ?.get(1)
+        check(!callId.isNullOrBlank())
+
+        val sampledAt = System.currentTimeMillis()
+        val telemetry = client.post("/calls/$callId/telemetry") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """
+                    {
+                      "sampledAtEpochMillis":$sampledAt,
+                      "roundTripTimeMs":42.0,
+                      "jitterMs":8.0,
+                      "uplinkPacketLossPercent":1.0,
+                      "downlinkPacketLossPercent":2.0,
+                      "uplinkBitrateKbps":64.0,
+                      "downlinkBitrateKbps":96.0,
+                      "networkTransport":"wifi",
+                      "sendCodec":"audio/opus",
+                      "receiveCodec":"audio/opus",
+                      "networkValidated":true,
+                      "networkMetered":false
+                    }
+                """.trimIndent(),
+            )
+        }
+        assertEquals(HttpStatusCode.NoContent, telemetry.status)
+
+        val ended = client.post("/calls/$callId/end") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }
+        assertEquals(HttpStatusCode.OK, ended.status)
+
+        val from = sampledAt - 43_200_000L
+        val to = sampledAt + 43_200_000L
+        val calendar = client.get("/calls/history/calendar?from=$from&to=$to&zoneId=UTC") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }
+        assertEquals(HttpStatusCode.OK, calendar.status)
+        assertTrue(calendar.bodyAsText().contains("\"callCount\":"), "calendar call count field")
+        assertTrue(Regex("\\\"callCount\\\":[1-9][0-9]*").containsMatchIn(calendar.bodyAsText()), "calendar has a call")
+
+        val day = client.get("/calls/history/day?from=$from&to=$to&limit=50") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }
+        val dayBody = day.bodyAsText()
+        assertEquals(HttpStatusCode.OK, day.status)
+        assertTrue(dayBody.contains("\"callId\":\"$callId\""), "day contains call")
+        assertTrue(dayBody.contains("\"outcome\":\"cancelled\""), "outgoing unanswered call outcome")
+
+        val detail = client.get("/calls/$callId/details") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }
+        val detailBody = detail.bodyAsText()
+        assertEquals(HttpStatusCode.OK, detail.status)
+        assertTrue(detailBody.contains("\"direction\":\"outgoing\""), "detail direction")
+        assertTrue(detailBody.contains("\"sampleCount\":1"), "detail telemetry count")
+        assertTrue(detailBody.contains("\"averageRoundTripTimeMs\":42.0"), "detail RTT summary")
+        assertTrue(!detailBody.contains("roomName"), "detail hides provider room")
     }
 
     @Test

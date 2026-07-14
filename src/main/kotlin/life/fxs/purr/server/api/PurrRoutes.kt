@@ -30,6 +30,8 @@ import life.fxs.purr.server.application.model.CallHistoryCursorCodec
 import io.micrometer.prometheus.PrometheusMeterRegistry
 import life.fxs.purr.server.application.model.CreateCallSessionCommand
 import life.fxs.purr.server.model.CallRecordingsResponseDto
+import life.fxs.purr.server.model.CallTelemetryRequestDto
+import life.fxs.purr.server.application.port.CallTelemetrySample
 import life.fxs.purr.server.model.ChangePasswordRequestDto
 import life.fxs.purr.server.model.UpdateProfileRequestDto
 
@@ -232,6 +234,29 @@ fun Route.registerPurrRoutes(
             )
         }
 
+        get("/calls/{callId}/details") {
+            val callId = call.parameters["callId"] ?: throw ApiException(HttpStatusCode.BadRequest, "Missing callId")
+            val user = call.requireAuthenticatedUser()
+            call.respond(
+                HttpStatusCode.OK,
+                onBlockingIo { dependencies.callDetailQueryService.getDetail(user.userId, callId).toDto() },
+            )
+        }
+
+        post("/calls/{callId}/telemetry") {
+            val callId = call.parameters["callId"] ?: throw ApiException(HttpStatusCode.BadRequest, "Missing callId")
+            val user = call.requireAuthenticatedUser()
+            val request = call.receive<CallTelemetryRequestDto>()
+            onBlockingIo {
+                dependencies.callTelemetryService.record(
+                    userId = user.userId,
+                    callId = callId,
+                    sample = request.toTelemetrySample(callId, user.userId),
+                )
+            }
+            call.respond(HttpStatusCode.NoContent)
+        }
+
         post("/calls/{callId}/recordings/{recordingId}/download") {
             val callId = call.parameters["callId"] ?: throw ApiException(HttpStatusCode.BadRequest, "Missing callId")
             val recordingId = call.parameters["recordingId"]
@@ -267,6 +292,42 @@ fun Route.registerPurrRoutes(
             )
         }
 
+        get("/calls/history/calendar") {
+            val user = call.requireAuthenticatedUser()
+            val from = call.requireEpochQuery("from")
+            val to = call.requireEpochQuery("to")
+            val zoneId = call.request.queryParameters["zoneId"]
+                ?.takeIf(String::isNotBlank)
+                ?: throw ApiException(HttpStatusCode.BadRequest, "Missing calendar time zone")
+            call.respond(
+                HttpStatusCode.OK,
+                onBlockingIo {
+                    dependencies.callCalendarQueryService.getCalendar(user.userId, from, to, zoneId).toDto()
+                },
+            )
+        }
+
+        get("/calls/history/day") {
+            val user = call.requireAuthenticatedUser()
+            val from = call.requireEpochQuery("from")
+            val to = call.requireEpochQuery("to")
+            val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: DEFAULT_CALL_HISTORY_PAGE_SIZE
+            if (limit !in 1..MAX_CALL_HISTORY_PAGE_SIZE) {
+                throw ApiException(HttpStatusCode.BadRequest, "Call history page size must be between 1 and 50")
+            }
+            val rawCursor = call.request.queryParameters["before"]
+            val cursor = rawCursor?.let(CallHistoryCursorCodec::decode)
+            if (rawCursor != null && cursor == null) {
+                throw ApiException(HttpStatusCode.BadRequest, "Invalid call history cursor")
+            }
+            call.respond(
+                HttpStatusCode.OK,
+                onBlockingIo {
+                    dependencies.callHistoryQueryService.getDay(user.userId, from, to, limit, cursor).toDto()
+                },
+            )
+        }
+
         get("/calls/active") {
             val user = call.requireAuthenticatedUser()
             val activeCall = onBlockingIo { dependencies.callSessionService.getActiveCall(user.userId) }
@@ -278,6 +339,27 @@ fun Route.registerPurrRoutes(
 private fun io.ktor.server.application.ApplicationCall.requireAuthenticatedUser(): AuthenticatedUser {
     return principal<AuthenticatedUser>() ?: throw ApiException(HttpStatusCode.Unauthorized, "Missing authenticated user")
 }
+
+private fun io.ktor.server.application.ApplicationCall.requireEpochQuery(name: String): Long =
+    request.queryParameters[name]?.toLongOrNull()
+        ?: throw ApiException(HttpStatusCode.BadRequest, "Missing or invalid $name")
+
+private fun CallTelemetryRequestDto.toTelemetrySample(callId: String, userId: String) = CallTelemetrySample(
+    callId = callId,
+    userId = userId,
+    sampledAtEpochMillis = sampledAtEpochMillis,
+    roundTripTimeMs = roundTripTimeMs,
+    jitterMs = jitterMs,
+    uplinkPacketLossPercent = uplinkPacketLossPercent,
+    downlinkPacketLossPercent = downlinkPacketLossPercent,
+    uplinkBitrateKbps = uplinkBitrateKbps,
+    downlinkBitrateKbps = downlinkBitrateKbps,
+    networkTransport = networkTransport,
+    sendCodec = sendCodec,
+    receiveCodec = receiveCodec,
+    networkValidated = networkValidated,
+    networkMetered = networkMetered,
+)
 
 @Serializable
 private data class HealthResponse(

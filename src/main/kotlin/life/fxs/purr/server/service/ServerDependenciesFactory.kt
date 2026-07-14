@@ -30,6 +30,7 @@ import life.fxs.purr.server.repository.AuthSessionRepository
 import life.fxs.purr.server.repository.CallSessionRepository
 import life.fxs.purr.server.repository.CallRecordingRepository
 import life.fxs.purr.server.repository.CallRecordingConsentRepository
+import life.fxs.purr.server.repository.CallTelemetryRepository
 import life.fxs.purr.server.repository.RecordingCommandRepository
 import life.fxs.purr.server.repository.PairBondRepository
 import life.fxs.purr.server.repository.UserRepository
@@ -57,6 +58,9 @@ import life.fxs.purr.server.application.call.CallRoomLifecycleService
 import life.fxs.purr.server.application.call.CallRoomReconciliationService
 import life.fxs.purr.server.application.call.CallRecordingWebhookService
 import life.fxs.purr.server.application.call.CallHistoryQueryService
+import life.fxs.purr.server.application.call.CallCalendarQueryService
+import life.fxs.purr.server.application.call.CallDetailQueryService
+import life.fxs.purr.server.application.call.CallTelemetryService
 import life.fxs.purr.server.application.call.RecordingCommandService
 import life.fxs.purr.server.application.call.RecordingQueryService
 import org.mindrot.jbcrypt.BCrypt
@@ -72,6 +76,9 @@ data class ServerDependencies(
     val pairService: PairService,
     val callSessionService: CallSessionService,
     val callHistoryQueryService: CallHistoryQueryService,
+    val callCalendarQueryService: CallCalendarQueryService,
+    val callDetailQueryService: CallDetailQueryService,
+    val callTelemetryService: CallTelemetryService,
     val recordingCommandService: RecordingCommandService,
     val recordingQueryService: RecordingQueryService,
     val liveKitWebhookService: LiveKitWebhookService,
@@ -183,6 +190,7 @@ object ServerDependenciesFactory {
             val webhookInboxRepository = WebhookInboxRepository()
             val recordingCommandRepository = RecordingCommandRepository(callRecordingRepository)
             val callRecordingConsentRepository = CallRecordingConsentRepository()
+            val callTelemetryRepository = CallTelemetryRepository()
             val presenceRepository = PresenceRepository()
             val applicationTransaction = databaseResources.applicationTransaction
             val outboxRepository = OutboxRepository()
@@ -366,6 +374,19 @@ object ServerDependenciesFactory {
                 pairService = pairService,
                 callSessionStore = callSessionRepository,
             )
+            val callCalendarQueryService = CallCalendarQueryService(
+                pairService = pairService,
+                callSessionStore = callSessionRepository,
+            )
+            val callDetailQueryService = CallDetailQueryService(
+                callAccessPolicy = callAccessPolicy,
+                callRecordingStore = callRecordingRepository,
+                callTelemetryStore = callTelemetryRepository,
+            )
+            val callTelemetryService = CallTelemetryService(
+                callAccessPolicy = callAccessPolicy,
+                callTelemetryStore = callTelemetryRepository,
+            )
             val liveKitWebhookService = LiveKitWebhookService(
                 liveKitConfig = config.liveKit,
                 callRoomLifecycleService = callRoomLifecycleService,
@@ -402,6 +423,9 @@ object ServerDependenciesFactory {
                 pairService = pairService,
                 callSessionService = callSessionService,
                 callHistoryQueryService = callHistoryQueryService,
+                callCalendarQueryService = callCalendarQueryService,
+                callDetailQueryService = callDetailQueryService,
+                callTelemetryService = callTelemetryService,
                 recordingCommandService = recordingCommandService,
                 recordingQueryService = recordingQueryService,
                 liveKitWebhookService = liveKitWebhookService,

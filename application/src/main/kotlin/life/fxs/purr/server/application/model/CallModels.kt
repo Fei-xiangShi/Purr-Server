@@ -39,13 +39,68 @@ data class ActiveCallResult(
 
 data class CallHistoryItemResult(
     val callId: String,
+    val direction: CallDirection,
+    val outcome: CallOutcome,
+    val requestedAtEpochMillis: Long,
     val startedAtEpochMillis: Long,
+    val connectedAtEpochMillis: Long?,
+    val endedAtEpochMillis: Long,
+    val ringingDurationMillis: Long,
     val durationMillis: Long,
+    val recordingStatus: RecordingStatus,
 )
 
 data class CallHistoryResult(
     val calls: List<CallHistoryItemResult>,
     val nextCursor: String?,
+)
+
+enum class CallDirection(val wireValue: String) {
+    INCOMING("incoming"),
+    OUTGOING("outgoing"),
+}
+
+enum class CallOutcome(val wireValue: String) {
+    COMPLETED("completed"),
+    MISSED("missed"),
+    CANCELLED("cancelled"),
+}
+
+data class CallCalendarDayResult(
+    val date: String,
+    val callCount: Int,
+    val totalDurationMillis: Long,
+)
+
+data class CallCalendarResult(
+    val days: List<CallCalendarDayResult>,
+)
+
+data class CallQualitySummaryResult(
+    val sampleCount: Int,
+    val averageRoundTripTimeMs: Double?,
+    val averageJitterMs: Double?,
+    val averagePacketLossPercent: Double?,
+    val maximumPacketLossPercent: Double?,
+    val averageUplinkBitrateKbps: Double?,
+    val averageDownlinkBitrateKbps: Double?,
+    val networkTransports: List<String>,
+    val codecs: List<String>,
+)
+
+data class CallDetailResult(
+    val callId: String,
+    val direction: CallDirection,
+    val outcome: CallOutcome,
+    val requestedAtEpochMillis: Long,
+    val connectedAtEpochMillis: Long?,
+    val endedAtEpochMillis: Long,
+    val ringingDurationMillis: Long,
+    val durationMillis: Long,
+    val recordingStatus: RecordingStatus,
+    val recordingCount: Int,
+    val recordingAvailable: Boolean,
+    val quality: CallQualitySummaryResult?,
 )
 
 data class RecordingResultView(

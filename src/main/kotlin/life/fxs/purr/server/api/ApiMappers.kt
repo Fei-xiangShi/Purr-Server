@@ -5,6 +5,9 @@ import life.fxs.purr.server.application.model.AuthSessionResult
 import life.fxs.purr.server.application.model.CallRecordingResult
 import life.fxs.purr.server.application.model.CallHistoryItemResult
 import life.fxs.purr.server.application.model.CallHistoryResult
+import life.fxs.purr.server.application.model.CallCalendarResult
+import life.fxs.purr.server.application.model.CallDetailResult
+import life.fxs.purr.server.application.model.CallQualitySummaryResult
 import life.fxs.purr.server.application.model.CallSessionResult
 import life.fxs.purr.server.application.model.CallStatusResult
 import life.fxs.purr.server.application.model.PairDetails
@@ -17,6 +20,10 @@ import life.fxs.purr.server.model.AuthSessionDto
 import life.fxs.purr.server.model.CallRecordingDto
 import life.fxs.purr.server.model.CallHistoryItemDto
 import life.fxs.purr.server.model.CallHistoryResponseDto
+import life.fxs.purr.server.model.CallCalendarDayDto
+import life.fxs.purr.server.model.CallCalendarResponseDto
+import life.fxs.purr.server.model.CallDetailDto
+import life.fxs.purr.server.model.CallQualitySummaryDto
 import life.fxs.purr.server.model.CallStatusDto
 import life.fxs.purr.server.model.PairBond
 import life.fxs.purr.server.model.PairedPartner
@@ -109,6 +116,46 @@ internal fun CallHistoryResult.toDto() = CallHistoryResponseDto(
 
 private fun CallHistoryItemResult.toDto() = CallHistoryItemDto(
     callId = callId,
+    direction = direction.wireValue,
+    outcome = outcome.wireValue,
+    requestedAtEpochMillis = requestedAtEpochMillis,
     startedAtEpochMillis = startedAtEpochMillis,
+    connectedAtEpochMillis = connectedAtEpochMillis,
+    endedAtEpochMillis = endedAtEpochMillis,
+    ringingDurationMillis = ringingDurationMillis,
     durationMillis = durationMillis,
+    recordingStatus = recordingStatus.wireValue,
+)
+
+internal fun CallCalendarResult.toDto() = CallCalendarResponseDto(
+    days = days.map { day ->
+        CallCalendarDayDto(day.date, day.callCount, day.totalDurationMillis)
+    },
+)
+
+internal fun CallDetailResult.toDto() = CallDetailDto(
+    callId = callId,
+    direction = direction.wireValue,
+    outcome = outcome.wireValue,
+    requestedAtEpochMillis = requestedAtEpochMillis,
+    connectedAtEpochMillis = connectedAtEpochMillis,
+    endedAtEpochMillis = endedAtEpochMillis,
+    ringingDurationMillis = ringingDurationMillis,
+    durationMillis = durationMillis,
+    recordingStatus = recordingStatus.wireValue,
+    recordingCount = recordingCount,
+    recordingAvailable = recordingAvailable,
+    quality = quality?.toDto(),
+)
+
+private fun CallQualitySummaryResult.toDto() = CallQualitySummaryDto(
+    sampleCount = sampleCount,
+    averageRoundTripTimeMs = averageRoundTripTimeMs,
+    averageJitterMs = averageJitterMs,
+    averagePacketLossPercent = averagePacketLossPercent,
+    maximumPacketLossPercent = maximumPacketLossPercent,
+    averageUplinkBitrateKbps = averageUplinkBitrateKbps,
+    averageDownlinkBitrateKbps = averageDownlinkBitrateKbps,
+    networkTransports = networkTransports,
+    codecs = codecs,
 )

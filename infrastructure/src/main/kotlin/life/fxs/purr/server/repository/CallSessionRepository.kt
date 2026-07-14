@@ -17,6 +17,7 @@ import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.isNull
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.less
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.lessEq
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.greaterEq
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.isNotNull
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.or
@@ -180,13 +181,12 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
         val endedCalls =
             (CallSessionsTable.pairId eq pairId) and
                 (CallSessionsTable.callState eq CallState.ENDED.wireValue) and
-                CallSessionsTable.endedAtEpochMillis.isNotNull() and
-                CallSessionsTable.connectedAtEpochMillis.isNotNull()
+                CallSessionsTable.endedAtEpochMillis.isNotNull()
         val condition = cursor?.let {
             endedCalls and (
-                (CallSessionsTable.connectedAtEpochMillis less it.startedAtEpochMillis) or
+                (CallSessionsTable.startedAtEpochMillis less it.startedAtEpochMillis) or
                     (
-                        (CallSessionsTable.connectedAtEpochMillis eq it.startedAtEpochMillis) and
+                        (CallSessionsTable.startedAtEpochMillis eq it.startedAtEpochMillis) and
                             (CallSessionsTable.callId less it.callId)
                         )
                 )
@@ -194,7 +194,39 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
         CallSessionsTable.selectAll()
             .where { condition }
             .orderBy(
-                CallSessionsTable.connectedAtEpochMillis to SortOrder.DESC,
+                CallSessionsTable.startedAtEpochMillis to SortOrder.DESC,
+                CallSessionsTable.callId to SortOrder.DESC,
+            )
+            .limit(limit)
+            .map { it.toCallRecord() }
+    }
+
+    override fun findEndedByPairIdBetween(
+        pairId: String,
+        fromEpochMillis: Long,
+        toEpochMillis: Long,
+        limit: Int,
+        cursor: CallHistoryCursor?,
+    ): List<CallRecord> = transaction {
+        val inRange =
+            (CallSessionsTable.pairId eq pairId) and
+                (CallSessionsTable.callState eq CallState.ENDED.wireValue) and
+                CallSessionsTable.endedAtEpochMillis.isNotNull() and
+                (CallSessionsTable.startedAtEpochMillis greaterEq fromEpochMillis) and
+                (CallSessionsTable.startedAtEpochMillis less toEpochMillis)
+        val condition = cursor?.let {
+            inRange and (
+                (CallSessionsTable.startedAtEpochMillis less it.startedAtEpochMillis) or
+                    (
+                        (CallSessionsTable.startedAtEpochMillis eq it.startedAtEpochMillis) and
+                            (CallSessionsTable.callId less it.callId)
+                        )
+                )
+        } ?: inRange
+        CallSessionsTable.selectAll()
+            .where { condition }
+            .orderBy(
+                CallSessionsTable.startedAtEpochMillis to SortOrder.DESC,
                 CallSessionsTable.callId to SortOrder.DESC,
             )
             .limit(limit)

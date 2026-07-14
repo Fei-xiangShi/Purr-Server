@@ -63,6 +63,18 @@ interface CallSessionStore {
     ): CallRecord? = null
 
     fun findEndedByPairId(pairId: String, limit: Int, cursor: CallHistoryCursor?): List<CallRecord>
+
+    fun findEndedByPairIdBetween(
+        pairId: String,
+        fromEpochMillis: Long,
+        toEpochMillis: Long,
+        limit: Int,
+        cursor: CallHistoryCursor? = null,
+    ): List<CallRecord> = findEndedByPairId(pairId, Int.MAX_VALUE, cursor)
+        .asSequence()
+        .filter { it.startedAtEpochMillis in fromEpochMillis until toEpochMillis }
+        .take(limit)
+        .toList()
 }
 
 data class RecordingRecord(
