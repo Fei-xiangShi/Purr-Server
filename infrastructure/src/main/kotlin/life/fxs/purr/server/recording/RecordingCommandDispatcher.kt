@@ -14,6 +14,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.application.port.CallSessionStore
 import life.fxs.purr.server.application.port.ProviderRecordingResult
 import life.fxs.purr.server.application.port.RecordingCommandRecord
@@ -24,6 +25,7 @@ import life.fxs.purr.server.application.port.RecordingCommandWakeup
 import life.fxs.purr.server.application.port.RecordingCommandProcessor
 import life.fxs.purr.server.application.port.RecordingController
 import life.fxs.purr.server.config.OutboxConfig
+import life.fxs.purr.server.model.CallDurationPolicy
 import life.fxs.purr.server.model.CallState
 import life.fxs.purr.server.model.RecordingStatus
 import org.slf4j.LoggerFactory
@@ -137,35 +139,11 @@ class RecordingCommandDispatcher(
     private fun execute(command: RecordingCommandRecord, nowEpochMillis: Long): ProviderRecordingResult {
         val call = callSessionStore.find(command.callId)
             ?: error("Call ${command.callId} no longer exists")
-        return when (command.type) {
-            RecordingCommandType.START -> {
-                if (call.state != CallState.ACTIVE) {
-                    if (call.state == CallState.ENDED &&
-                        call.recordingStatus in setOf(RecordingStatus.STARTING, RecordingStatus.STOPPING)
-                    ) {
-                        // The process may have died after the provider accepted
-                        // START but before its id was committed. Query by the
-                        // stable operation key before deciding that no provider
-                        // side effect exists.
-                        recordingController.findRecordingForOperation(
-                            callId = command.callId,
-                            roomName = command.roomName,
-                            operationId = command.commandId,
-                        )?.let { return it }
-                        return ProviderRecordingResult(
-                            status = RecordingStatus.STOPPED,
-                            recordingId = call.recordingId,
-                            updatedAtEpochMillis = nowEpochMillis,
-                        )
-                    }
-                    error("Cannot start recording for call ${command.callId} in state ${call.state.wireValue}")
-                }
-                recordingController.startRecording(
-                    callId = command.callId,
-                    roomName = command.roomName,
-                    operationId = command.commandId,
-                )
-            }
+        val preserveProviderClock = command.type == RecordingCommandType.START &&
+            call.state == CallState.ENDED &&
+            call.recordingStatus in setOf(RecordingStatus.STARTING, RecordingStatus.STOPPING)
+        val result = when (command.type) {
+            RecordingCommandType.START -> executeStart(command, call, nowEpochMillis)
             RecordingCommandType.STOP -> {
                 val recordingId = command.recordingId ?: call.recordingId
                 if (recordingId.isNullOrBlank()) {
@@ -190,13 +168,84 @@ class RecordingCommandDispatcher(
                     operationId = command.commandId,
                 )
             }
-        }.let { result ->
-            result.copy(
-                recordingId = result.recordingId ?: command.recordingId,
-                updatedAtEpochMillis = maxOf(result.updatedAtEpochMillis, nowEpochMillis),
-            )
         }
+        return result.copy(
+            recordingId = result.recordingId ?: command.recordingId,
+            updatedAtEpochMillis = if (preserveProviderClock) {
+                result.updatedAtEpochMillis
+            } else {
+                maxOf(result.updatedAtEpochMillis, nowEpochMillis)
+            },
+        )
     }
+
+    private fun executeStart(
+        command: RecordingCommandRecord,
+        initialCall: CallRecord,
+        nowEpochMillis: Long,
+    ): ProviderRecordingResult {
+        if (initialCall.state == CallState.ENDED) {
+            if (initialCall.recordingStatus in setOf(RecordingStatus.STARTING, RecordingStatus.STOPPING)) {
+                // The process may have died after the provider accepted START
+                // but before its id was committed. Reconcile only states that
+                // prove provider I/O may already have happened.
+                recordingController.findRecordingForOperation(
+                    callId = command.callId,
+                    roomName = command.roomName,
+                    operationId = command.commandId,
+                )?.let { return it }
+                return ProviderRecordingResult(
+                    status = RecordingStatus.STOPPED,
+                    recordingId = initialCall.recordingId,
+                    updatedAtEpochMillis = nowEpochMillis,
+                )
+            }
+            // A delayed START for a call that ended while still IDLE is a
+            // successful no-op. In particular, no provider request is made.
+            return initialCall.toProviderRecordingResult(nowEpochMillis)
+        }
+        check(initialCall.state == CallState.ACTIVE) {
+            "Cannot start recording for call ${command.callId} in state ${initialCall.state.wireValue}"
+        }
+
+        val call = when (initialCall.recordingStatus) {
+            RecordingStatus.IDLE,
+            RecordingStatus.STOPPED,
+            RecordingStatus.FAILED,
+            RecordingStatus.DELETED,
+            -> callSessionStore.claimRecordingStartAfterMinimumDuration(
+                callId = command.callId,
+                updatedAtEpochMillis = nowEpochMillis,
+                minimumConnectedDurationMillis = CallDurationPolicy.MINIMUM_RECORDING_DURATION_MILLIS,
+            ) ?: callSessionStore.find(command.callId)
+                ?: error("Call ${command.callId} no longer exists")
+            RecordingStatus.STARTING,
+            RecordingStatus.STOPPING,
+            RecordingStatus.RECORDING,
+            -> initialCall
+        }
+
+        if (call.state != CallState.ACTIVE) return call.toProviderRecordingResult(nowEpochMillis)
+        if (call.recordingStatus == RecordingStatus.RECORDING) {
+            return call.toProviderRecordingResult(nowEpochMillis)
+        }
+        check(call.recordingStatus in setOf(RecordingStatus.STARTING, RecordingStatus.STOPPING)) {
+            "Call ${command.callId} is not eligible to start recording"
+        }
+        return recordingController.startRecording(
+            callId = command.callId,
+            roomName = command.roomName,
+            operationId = command.commandId,
+        )
+    }
+
+    private fun CallRecord.toProviderRecordingResult(
+        nowEpochMillis: Long,
+    ) = ProviderRecordingResult(
+        status = recordingStatus,
+        recordingId = recordingId,
+        updatedAtEpochMillis = nowEpochMillis,
+    )
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return

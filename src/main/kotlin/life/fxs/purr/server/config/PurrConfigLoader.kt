@@ -138,6 +138,23 @@ object PurrConfigLoader {
                     "PURR_OUTBOX_RETRY_MAX_SECONDS",
                 ),
             ),
+            push = PushConfig(
+                enabled = boolean(config, "purr.push.enabled", "PURR_PUSH_ENABLED"),
+                provider = enumValueOf<PushProvider>(
+                    string(config, "purr.push.provider", "PURR_PUSH_PROVIDER").uppercase(),
+                ),
+                fcmProjectId = string(config, "purr.push.fcmProjectId", "PURR_PUSH_FCM_PROJECT_ID"),
+                fcmServiceAccountPath = string(
+                    config,
+                    "purr.push.fcmServiceAccountPath",
+                    "PURR_PUSH_FCM_SERVICE_ACCOUNT_PATH",
+                ),
+                messageTtlSeconds = long(
+                    config,
+                    "purr.push.messageTtlSeconds",
+                    "PURR_PUSH_MESSAGE_TTL_SECONDS",
+                ),
+            ),
             rateLimit = AuthRateLimitConfig(
                 provider = enumValueOf<RateLimitProvider>(
                     string(config, "purr.rateLimit.provider", "PURR_RATE_LIMIT_PROVIDER").uppercase(),
@@ -314,6 +331,17 @@ object PurrConfigLoader {
         require(config.outbox.retryMaxSeconds in config.outbox.retryBaseSeconds..86_400) {
             "Outbox retry max delay must be between the base delay and 86400 seconds"
         }
+        require(config.push.messageTtlSeconds in 15..120) {
+            "Push message TTL must be between 15 and 120 seconds"
+        }
+        if (config.push.enabled) {
+            require(config.push.fcmProjectId.matches(Regex("[a-z][a-z0-9-]{4,62}"))) {
+                "FCM project ID is invalid"
+            }
+            require(config.push.fcmServiceAccountPath.isNotBlank()) {
+                "FCM service account path is required when push delivery is enabled"
+            }
+        }
         require(config.rateLimit.limit in 1..10_000) {
             "Authentication rate limit must be between 1 and 10000"
         }
@@ -346,6 +374,9 @@ object PurrConfigLoader {
         }
 
         if (config.environment == RuntimeEnvironment.PRODUCTION) {
+            require(config.push.enabled) {
+                "Production incoming calls require push delivery"
+            }
             require(config.callReconciliation.enabled) {
                 "Production call reconciliation must be enabled"
             }

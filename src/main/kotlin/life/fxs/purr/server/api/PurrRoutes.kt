@@ -12,6 +12,7 @@ import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
+import io.ktor.server.routing.delete
 import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
@@ -34,6 +35,8 @@ import life.fxs.purr.server.model.CallTelemetryRequestDto
 import life.fxs.purr.server.application.port.CallTelemetrySample
 import life.fxs.purr.server.model.ChangePasswordRequestDto
 import life.fxs.purr.server.model.UpdateProfileRequestDto
+import life.fxs.purr.server.model.PushDeviceRegistrationDto
+import life.fxs.purr.server.application.port.PushProvider
 
 fun Route.registerPurrRoutes(
     dependencies: ServerDependencies,
@@ -55,7 +58,7 @@ fun Route.registerPurrRoutes(
         }
         if (
             ready &&
-            dependencies.realtimeEventPublisher.isReady() &&
+            dependencies.durableEventSink.isReady() &&
             dependencies.authRateLimiter.isReady()
         ) {
             call.respond(HttpStatusCode.OK, HealthResponse(status = "ok"))
@@ -171,6 +174,33 @@ fun Route.registerPurrRoutes(
         get("/pair") {
             val user = call.requireAuthenticatedUser()
             call.respond(onBlockingIo { dependencies.pairService.requirePairBond(user.userId).toDto() })
+        }
+
+        put("/devices/push/{installationId}") {
+            val installationId = call.parameters["installationId"]
+                ?: throw ApiException(HttpStatusCode.BadRequest, "Missing installationId")
+            val request = call.receive<PushDeviceRegistrationDto>()
+            val provider = runCatching { PushProvider.valueOf(request.provider.uppercase()) }
+                .getOrElse { throw ApiException(HttpStatusCode.BadRequest, "Unsupported push provider") }
+            val user = call.requireAuthenticatedUser()
+            onBlockingIo {
+                dependencies.pushDeviceService.register(
+                    userId = user.userId,
+                    sessionId = user.sessionId,
+                    installationId = installationId,
+                    provider = provider,
+                    token = request.token,
+                )
+            }
+            call.respond(HttpStatusCode.NoContent)
+        }
+
+        delete("/devices/push/{installationId}") {
+            val installationId = call.parameters["installationId"]
+                ?: throw ApiException(HttpStatusCode.BadRequest, "Missing installationId")
+            val user = call.requireAuthenticatedUser()
+            onBlockingIo { dependencies.pushDeviceService.unregister(user.userId, installationId) }
+            call.respond(HttpStatusCode.NoContent)
         }
 
         post("/calls/session") {

@@ -45,6 +45,7 @@ interface RecordingCommandStore {
         callId: String,
         roomName: String,
         requestedAtEpochMillis: Long,
+        availableAtEpochMillis: Long = requestedAtEpochMillis,
     ): RecordingCommandRecord
 
     fun enqueueStop(

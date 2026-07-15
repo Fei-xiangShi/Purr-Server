@@ -19,6 +19,15 @@ class PurrConfigLoaderTest {
     }
 
     @Test
+    fun `production requires push delivery`() {
+        val config = validProductionConfig().copy(
+            push = validProductionConfig().push.copy(enabled = false),
+        )
+
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(config) }
+    }
+
+    @Test
     fun `production rejects short Redis password`() {
         val config = validProductionConfig().copy(
             realtime = validProductionConfig().realtime.copy(redisPassword = "too-short"),
@@ -197,6 +206,13 @@ class PurrConfigLoaderTest {
             maxAttempts = 10,
             retryBaseSeconds = 1,
             retryMaxSeconds = 300,
+        ),
+        push = PushConfig(
+            enabled = true,
+            provider = PushProvider.FCM,
+            fcmProjectId = "purr-production",
+            fcmServiceAccountPath = "/run/secrets/purr-fcm.json",
+            messageTtlSeconds = 60,
         ),
         rateLimit = AuthRateLimitConfig(
             provider = RateLimitProvider.REDIS,

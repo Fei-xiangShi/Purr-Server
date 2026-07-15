@@ -72,6 +72,12 @@ purr:
     maxAttempts: 10
     retryBaseSeconds: 1
     retryMaxSeconds: 300
+  push:
+    enabled: false
+    provider: fcm
+    fcmProjectId: "purr-development"
+    fcmServiceAccountPath: ""
+    messageTtlSeconds: 60
   callReconciliation:
     enabled: false
     intervalSeconds: 10

@@ -8,6 +8,7 @@ data class PurrServerConfig(
     val recording: RecordingConfig,
     val realtime: RealtimeConfig,
     val outbox: OutboxConfig,
+    val push: PushConfig,
     val rateLimit: AuthRateLimitConfig,
     val database: DatabaseConfig,
     val callReconciliation: CallReconciliationConfig = CallReconciliationConfig(),
@@ -101,6 +102,18 @@ data class OutboxConfig(
     val retryBaseSeconds: Long,
     val retryMaxSeconds: Long,
 )
+
+data class PushConfig(
+    val enabled: Boolean,
+    val provider: PushProvider,
+    val fcmProjectId: String,
+    val fcmServiceAccountPath: String,
+    val messageTtlSeconds: Long,
+)
+
+enum class PushProvider {
+    FCM,
+}
 
 data class CallReconciliationConfig(
     val enabled: Boolean = false,

@@ -21,6 +21,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.slf4j.api)
+    implementation(libs.google.auth.oauth2.http)
 
     runtimeOnly(libs.postgresql)
     runtimeOnly(libs.h2)

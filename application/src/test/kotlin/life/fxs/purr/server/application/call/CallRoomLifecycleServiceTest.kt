@@ -21,6 +21,10 @@ import life.fxs.purr.server.application.port.ProviderRecordingResult
 import life.fxs.purr.server.application.port.RealtimeEvent
 import life.fxs.purr.server.application.port.RealtimeOutbox
 import life.fxs.purr.server.application.port.RecordingConsentStore
+import life.fxs.purr.server.application.port.RecordingCommandRecord
+import life.fxs.purr.server.application.port.RecordingCommandState
+import life.fxs.purr.server.application.port.RecordingCommandStore
+import life.fxs.purr.server.application.port.RecordingCommandType
 import life.fxs.purr.server.application.port.RecordingController
 import life.fxs.purr.server.application.port.RecordingRecord
 import life.fxs.purr.server.model.CallState
@@ -28,8 +32,8 @@ import life.fxs.purr.server.model.RecordingStatus
 
 class CallRoomLifecycleServiceTest {
     @Test
-    fun `second participant activates and starts recording once across duplicate events`() {
-        val harness = harness(waitingCall())
+    fun `second participant activates and schedules recording after thirty seconds`() {
+        val harness = harness(waitingCall(), durableCommands = true)
         val event = joinedEvent(reportedParticipantCount = 2)
 
         harness.service.handle(event)
@@ -38,10 +42,11 @@ class CallRoomLifecycleServiceTest {
         assertEquals(CallState.ACTIVE, harness.calls.call.state)
         assertEquals(NOW.toEpochMilli(), harness.calls.call.connectedAtEpochMillis)
         assertEquals(1, harness.calls.activationTransitions)
-        assertEquals(1, harness.calls.recordingClaims)
-        assertEquals(1, harness.recordingController.startCalls)
-        assertEquals(RecordingStatus.RECORDING, harness.calls.call.recordingStatus)
-        assertEquals("recording-1", harness.calls.call.recordingId)
+        assertEquals(0, harness.calls.recordingClaims)
+        assertEquals(0, harness.recordingController.startCalls)
+        assertEquals(RecordingStatus.IDLE, harness.calls.call.recordingStatus)
+        assertEquals(1, harness.recordingCommands.starts.size)
+        assertEquals(NOW.plusSeconds(30).toEpochMilli(), harness.recordingCommands.starts.single().availableAtEpochMillis)
     }
 
     @Test
@@ -97,6 +102,7 @@ class CallRoomLifecycleServiceTest {
     fun `both call scoped identities activate the call`() {
         val harness = harness(
             waitingCall(),
+            durableCommands = true,
             participantReader = object : CallRoomParticipantReader {
                 override fun countActiveNonEgressParticipants(roomName: String): Int = 2
 
@@ -111,7 +117,8 @@ class CallRoomLifecycleServiceTest {
 
         assertEquals(CallState.ACTIVE, harness.calls.call.state)
         assertEquals(1, harness.calls.activationTransitions)
-        assertEquals(1, harness.recordingController.startCalls)
+        assertEquals(0, harness.recordingController.startCalls)
+        assertEquals(1, harness.recordingCommands.starts.size)
     }
 
     @Test
@@ -223,6 +230,7 @@ class CallRoomLifecycleServiceTest {
 
     private fun harness(
         initialCall: CallRecord,
+        durableCommands: Boolean = false,
         participantReader: CallRoomParticipantReader? = null,
     ): LifecycleHarness {
         val calls = MutableCallStore(initialCall)
@@ -230,6 +238,7 @@ class CallRoomLifecycleServiceTest {
         val pairStore = FakePairStore
         val outbox = mutableListOf<Pair<String, RealtimeEvent>>()
         val recordingController = FakeRecordingController()
+        val recordingCommands = FakeRecordingCommandStore()
         val lifecycle = CallLifecycleService(
             callSessionStore = calls,
             pairStore = pairStore,
@@ -247,8 +256,9 @@ class CallRoomLifecycleServiceTest {
             consentPolicyVersion = "test-v1",
             participantReader = participantReader,
             nowProvider = { NOW },
+            recordingCommandStore = recordingCommands.takeIf { durableCommands },
         )
-        return LifecycleHarness(service, calls, recordingController, outbox)
+        return LifecycleHarness(service, calls, recordingController, recordingCommands, outbox)
     }
 
     private fun joinedEvent(reportedParticipantCount: Int) = CallRoomEvent(
@@ -263,8 +273,71 @@ class CallRoomLifecycleServiceTest {
         val service: CallRoomLifecycleService,
         val calls: MutableCallStore,
         val recordingController: FakeRecordingController,
+        val recordingCommands: FakeRecordingCommandStore,
         val outbox: List<Pair<String, RealtimeEvent>>,
     )
+}
+
+private class FakeRecordingCommandStore : RecordingCommandStore {
+    val starts = mutableListOf<RecordingCommandRecord>()
+
+    override fun enqueueStart(
+        callId: String,
+        roomName: String,
+        requestedAtEpochMillis: Long,
+        availableAtEpochMillis: Long,
+    ): RecordingCommandRecord = starts.firstOrNull { it.callId == callId } ?: RecordingCommandRecord(
+        commandId = "start-$callId",
+        idempotencyKey = "start:$callId",
+        callId = callId,
+        roomName = roomName,
+        type = RecordingCommandType.START,
+        recordingId = null,
+        requestedAtEpochMillis = requestedAtEpochMillis,
+        availableAtEpochMillis = availableAtEpochMillis,
+        attemptCount = 0,
+        leaseOwner = null,
+        leaseUntilEpochMillis = null,
+        state = RecordingCommandState.PENDING,
+        completedAtEpochMillis = null,
+        lastError = null,
+    ).also(starts::add)
+
+    override fun enqueueStop(
+        callId: String,
+        roomName: String,
+        recordingId: String?,
+        requestedAtEpochMillis: Long,
+    ): RecordingCommandRecord = error("Not used")
+
+    override fun claimBatch(
+        workerId: String,
+        nowEpochMillis: Long,
+        leaseUntilEpochMillis: Long,
+        maxAttempts: Int,
+        limit: Int,
+    ): List<RecordingCommandRecord> = emptyList()
+
+    override fun markSucceeded(
+        commandId: String,
+        workerId: String,
+        result: ProviderRecordingResult,
+        completedAtEpochMillis: Long,
+    ): Boolean = false
+
+    override fun markFailed(
+        commandId: String,
+        workerId: String,
+        availableAtEpochMillis: Long,
+        errorMessage: String,
+        terminal: Boolean,
+        completedAtEpochMillis: Long,
+    ): Boolean = false
+
+    override fun findOpenForCall(
+        callId: String,
+        type: RecordingCommandType,
+    ): RecordingCommandRecord? = starts.firstOrNull { it.callId == callId && it.type == type }
 }
 
 class CallRecordingWebhookServiceTest {

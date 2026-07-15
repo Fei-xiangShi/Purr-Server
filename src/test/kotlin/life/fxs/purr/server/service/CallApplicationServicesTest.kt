@@ -213,10 +213,11 @@ class CallApplicationServicesTest {
                     pairId = "pair-demo",
                     roomName = "pair-demo-$callId",
                     createdByUserId = "user-a",
-                    startedAtEpochMillis = now.toEpochMilli(),
+                    startedAtEpochMillis = now.minusSeconds(30).toEpochMilli(),
                     updatedAtEpochMillis = now.toEpochMilli(),
                     state = CallState.ACTIVE,
                     recordingStatus = RecordingStatus.IDLE,
+                    connectedAtEpochMillis = now.minusSeconds(30).toEpochMilli(),
                 ),
             )
             consentRepository.record(callId, "user-a", "test-v1", now.toEpochMilli())

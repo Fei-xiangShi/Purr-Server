@@ -22,6 +22,7 @@ data class CallRecord(
     val recordingErrorMessage: String? = null,
     val endedAtEpochMillis: Long? = null,
     val connectedAtEpochMillis: Long? = null,
+    val durationMillis: Long? = null,
     val roomEmptySinceEpochMillis: Long? = null,
 )
 
@@ -54,6 +55,22 @@ interface CallSessionStore {
     fun endIfOpen(callId: String, endedAtEpochMillis: Long): EndCallResolution?
 
     fun claimRecordingStart(callId: String, updatedAtEpochMillis: Long): CallRecord?
+
+    /**
+     * Atomically starts recording only after the call has remained connected
+     * for the required duration. Persistence adapters should override this
+     * method so the duration and state checks share the same write predicate.
+     */
+    fun claimRecordingStartAfterMinimumDuration(
+        callId: String,
+        updatedAtEpochMillis: Long,
+        minimumConnectedDurationMillis: Long,
+    ): CallRecord? {
+        val call = find(callId) ?: return null
+        val connectedAt = call.connectedAtEpochMillis ?: return null
+        if (updatedAtEpochMillis - connectedAt < minimumConnectedDurationMillis) return null
+        return claimRecordingStart(callId, updatedAtEpochMillis)
+    }
 
     /** Atomically marks an active/start-pending recording as stopping. */
     fun claimRecordingStop(

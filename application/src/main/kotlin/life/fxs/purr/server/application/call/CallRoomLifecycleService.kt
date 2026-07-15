@@ -17,6 +17,7 @@ import life.fxs.purr.server.application.port.RecordingCommandStore
 import life.fxs.purr.server.application.port.RecordingCommandWakeup
 import life.fxs.purr.server.application.port.ApplicationTransaction
 import life.fxs.purr.server.application.port.CallRoomEventHandler
+import life.fxs.purr.server.model.CallDurationPolicy
 import life.fxs.purr.server.model.CallState
 import life.fxs.purr.server.model.RecordingStatus
 
@@ -95,45 +96,22 @@ class CallRoomLifecycleService(
             return
         }
 
-        val claimed = transaction.execute {
-            val requestedAt = nowProvider().toEpochMilli()
-            val claimed = callSessionStore.claimRecordingStart(
+        val commandStore = recordingCommandStore ?: return
+        val connectedAt = activeCall.connectedAtEpochMillis ?: return
+        transaction.execute {
+            commandStore.enqueueStart(
                 callId = activeCall.callId,
-                updatedAtEpochMillis = requestedAt,
-            ) ?: return@execute null
-            recordingCommandStore?.enqueueStart(
-                callId = claimed.callId,
-                roomName = claimed.roomName,
-                requestedAtEpochMillis = requestedAt,
+                roomName = activeCall.roomName,
+                requestedAtEpochMillis = connectedAt,
+                availableAtEpochMillis = CallDurationPolicy.recordingAvailableAtEpochMillis(connectedAt),
             )
-            claimed
-        } ?: return
+        }
 
         // The durable path intentionally performs no provider I/O in the
         // webhook transaction. A wake-up only asks the dispatcher to process
         // the persisted command sooner; losing the wake-up is harmless.
-        if (recordingCommandStore != null) {
-            drainRecordingCommandsBestEffort()
-            recordingCommandWakeup?.wake()
-            return
-        }
-
-        val controller = recordingController ?: return
-        try {
-            val result = controller.startRecording(claimed.callId, claimed.roomName)
-            val updated = updateRecording(claimed.callId, result)
-            maybeStopEndedCallRecording(updated)
-        } catch (error: Throwable) {
-            updateRecording(
-                claimed.callId,
-                ProviderRecordingResult(
-                    status = RecordingStatus.FAILED,
-                    recordingId = claimed.recordingId,
-                    updatedAtEpochMillis = nowProvider().toEpochMilli(),
-                    errorMessage = error.message,
-                ),
-            )
-        }
+        drainRecordingCommandsBestEffort()
+        recordingCommandWakeup?.wake()
     }
 
     private fun maybeEndCallWhenRoomEmpty(event: CallRoomEvent, call: CallRecord) {
@@ -205,13 +183,6 @@ class CallRoomLifecycleService(
      */
     private fun drainRecordingCommandsBestEffort() {
         runCatching { recordingCommandProcessor?.processPending() }
-    }
-
-    private fun maybeStopEndedCallRecording(call: CallRecord?) {
-        val storedCall = call ?: return
-        if (storedCall.state == CallState.ENDED) {
-            maybeStopRecording(storedCall)
-        }
     }
 
     private fun maybeStopRecording(call: CallRecord) {

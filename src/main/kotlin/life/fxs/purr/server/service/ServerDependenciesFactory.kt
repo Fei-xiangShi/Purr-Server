@@ -6,6 +6,7 @@ import life.fxs.purr.server.application.account.AvatarService
 import life.fxs.purr.server.application.account.PasswordChangeService
 import life.fxs.purr.server.application.account.PairService
 import life.fxs.purr.server.application.account.ProfileService
+import life.fxs.purr.server.application.account.PushDeviceService
 import life.fxs.purr.server.application.port.PasswordHasher
 import life.fxs.purr.server.application.port.PasswordVerifier
 import life.fxs.purr.server.application.port.PresenceStore
@@ -36,11 +37,15 @@ import life.fxs.purr.server.repository.PairBondRepository
 import life.fxs.purr.server.repository.UserRepository
 import life.fxs.purr.server.repository.PresenceRepository
 import life.fxs.purr.server.repository.WebhookInboxRepository
+import life.fxs.purr.server.repository.PushDeviceRepository
 import life.fxs.purr.server.realtime.RealtimeHub
 import life.fxs.purr.server.realtime.BrokeredRealtimeEventPublisher
 import life.fxs.purr.server.realtime.OutboxDispatcher
 import life.fxs.purr.server.realtime.OutboxRepository
 import life.fxs.purr.server.realtime.RedisRealtimeMessageBroker
+import life.fxs.purr.server.push.CompositeRealtimeEventSink
+import life.fxs.purr.server.push.FcmPushNotificationSender
+import life.fxs.purr.server.push.IncomingCallPushEventSink
 import life.fxs.purr.server.recording.S3RecordingDownloadUrlProvider
 import life.fxs.purr.server.recording.S3RecordingObjectStore
 import life.fxs.purr.server.avatar.AvatarStorageConfig
@@ -74,6 +79,7 @@ data class ServerDependencies(
     val avatarService: AvatarService,
     val profileService: ProfileService,
     val pairService: PairService,
+    val pushDeviceService: PushDeviceService,
     val callSessionService: CallSessionService,
     val callHistoryQueryService: CallHistoryQueryService,
     val callCalendarQueryService: CallCalendarQueryService,
@@ -85,6 +91,7 @@ data class ServerDependencies(
     val presenceStore: PresenceStore,
     val realtimeHub: RealtimeHub,
     val realtimeEventPublisher: RealtimeEventSink,
+    val durableEventSink: RealtimeEventSink,
     val authRateLimiter: AuthRateLimiter,
     private val realtimeResource: AutoCloseable?,
     private val recordingDownloadResource: AutoCloseable,
@@ -192,6 +199,7 @@ object ServerDependenciesFactory {
             val callRecordingConsentRepository = CallRecordingConsentRepository()
             val callTelemetryRepository = CallTelemetryRepository()
             val presenceRepository = PresenceRepository()
+            val pushDeviceRepository = PushDeviceRepository()
             val applicationTransaction = databaseResources.applicationTransaction
             val outboxRepository = OutboxRepository()
             val realtimeHub = RealtimeHub()
@@ -212,6 +220,19 @@ object ServerDependenciesFactory {
             }
             val authRateLimiter = AuthRateLimiterFactory.create(config.rateLimit, redisResources)
                 .also { authRateLimiterResource = it }
+
+            val pushSender = config.push.enabled.takeIf { it }
+                ?.let { FcmPushNotificationSender(config.push) }
+            val pushEventSink = IncomingCallPushEventSink(
+                deviceStore = pushDeviceRepository,
+                sender = pushSender ?: life.fxs.purr.server.application.port.PushNotificationSender { _, _ ->
+                    life.fxs.purr.server.application.port.PushDeliveryResult.Delivered
+                },
+                enabled = config.push.enabled,
+            )
+            val durableEventSink = CompositeRealtimeEventSink(
+                listOf(realtimeEventPublisher, pushEventSink),
+            )
 
             BootstrapSeeder(
                 userRepository = userRepository,
@@ -245,6 +266,7 @@ object ServerDependenciesFactory {
                 userAccountStore = userRepository,
                 presenceStore = presenceRepository,
             )
+            val pushDeviceService = PushDeviceService(pushDeviceRepository)
             val tokenService = JwtLiveKitTokenService(config.liveKit)
             val recordingAdapters = when (config.recording.provider) {
                 RecordingProvider.LIVEKIT -> RecordingAdapters(
@@ -409,7 +431,7 @@ object ServerDependenciesFactory {
             val dispatcher = OutboxDispatcher(
                 config = config.outbox,
                 repository = outboxRepository,
-                eventSink = realtimeEventPublisher,
+                eventSink = durableEventSink,
             ).also { it.start() }
             outboxDispatcher = dispatcher
             return ServerDependencies(
@@ -421,6 +443,7 @@ object ServerDependenciesFactory {
                 avatarService = avatarService,
                 profileService = profileService,
                 pairService = pairService,
+                pushDeviceService = pushDeviceService,
                 callSessionService = callSessionService,
                 callHistoryQueryService = callHistoryQueryService,
                 callCalendarQueryService = callCalendarQueryService,
@@ -432,6 +455,7 @@ object ServerDependenciesFactory {
                 presenceStore = presenceRepository,
                 realtimeHub = realtimeHub,
                 realtimeEventPublisher = realtimeEventPublisher,
+                durableEventSink = durableEventSink,
                 authRateLimiter = authRateLimiter,
                 realtimeResource = realtimeResource,
                 recordingDownloadResource = recordingDownloadUrlProvider,

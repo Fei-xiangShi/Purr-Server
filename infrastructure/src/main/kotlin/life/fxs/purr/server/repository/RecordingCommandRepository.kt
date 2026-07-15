@@ -35,12 +35,14 @@ class RecordingCommandRepository(
         callId: String,
         roomName: String,
         requestedAtEpochMillis: Long,
+        availableAtEpochMillis: Long,
     ): RecordingCommandRecord = enqueue(
         callId = callId,
         roomName = roomName,
         type = RecordingCommandType.START,
         recordingId = null,
         requestedAtEpochMillis = requestedAtEpochMillis,
+        availableAtEpochMillis = availableAtEpochMillis,
         // A call has one logical start command. The key must stay stable across
         // duplicate webhooks and crash reconciliation passes.
         idempotencyKey = "start:$callId",
@@ -57,6 +59,7 @@ class RecordingCommandRepository(
         type = RecordingCommandType.STOP,
         recordingId = recordingId,
         requestedAtEpochMillis = requestedAtEpochMillis,
+        availableAtEpochMillis = requestedAtEpochMillis,
         idempotencyKey = "stop:$callId",
     )
 
@@ -301,6 +304,7 @@ class RecordingCommandRepository(
         type: RecordingCommandType,
         recordingId: String?,
         requestedAtEpochMillis: Long,
+        availableAtEpochMillis: Long,
         idempotencyKey: String,
     ): RecordingCommandRecord = transaction {
         // Serializing against the call row makes the idempotency check safe on
@@ -324,7 +328,7 @@ class RecordingCommandRepository(
             it[RecordingCommandsTable.commandType] = type.name
             it[RecordingCommandsTable.recordingId] = recordingId
             it[RecordingCommandsTable.requestedAtEpochMillis] = requestedAtEpochMillis
-            it[RecordingCommandsTable.availableAtEpochMillis] = requestedAtEpochMillis
+            it[RecordingCommandsTable.availableAtEpochMillis] = availableAtEpochMillis
             it[attemptCount] = 0
             it[leaseOwner] = null
             it[leaseUntilEpochMillis] = null

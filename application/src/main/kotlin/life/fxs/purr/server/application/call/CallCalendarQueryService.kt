@@ -9,6 +9,7 @@ import life.fxs.purr.server.application.account.PairService
 import life.fxs.purr.server.application.model.CallCalendarDayResult
 import life.fxs.purr.server.application.model.CallCalendarResult
 import life.fxs.purr.server.application.port.CallSessionStore
+import life.fxs.purr.server.model.CallDurationPolicy
 
 class CallCalendarQueryService(
     private val pairService: PairService,
@@ -47,13 +48,10 @@ class CallCalendarQueryService(
                         date = date.toString(),
                         callCount = dayCalls.size,
                         totalDurationMillis = dayCalls.sumOf { call ->
-                            val connectedAt = call.connectedAtEpochMillis
-                            val endedAt = call.endedAtEpochMillis
-                            if (connectedAt != null && endedAt != null) {
-                                (endedAt - connectedAt).coerceAtLeast(0L)
-                            } else {
-                                0L
-                            }
+                            call.durationMillis ?: CallDurationPolicy.completedDurationMillis(
+                                connectedAtEpochMillis = call.connectedAtEpochMillis,
+                                endedAtEpochMillis = call.endedAtEpochMillis,
+                            ) ?: 0L
                         },
                     )
                 },

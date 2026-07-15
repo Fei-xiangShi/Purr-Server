@@ -13,6 +13,7 @@ object CallSessionsTable : Table("call_sessions") {
     val recordingProviderUpdatedAtEpochMillis = long("recording_provider_updated_at_epoch_millis").nullable()
     val endedAtEpochMillis = long("ended_at_epoch_millis").nullable()
     val connectedAtEpochMillis = long("connected_at_epoch_millis").nullable()
+    val durationMillis = long("duration_millis").nullable()
     val roomEmptySinceEpochMillis = long("room_empty_since_epoch_millis").nullable()
     val callState = varchar("call_state", 32)
     val recordingStatus = varchar("recording_status", 32)

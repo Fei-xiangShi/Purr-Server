@@ -11,6 +11,7 @@ import life.fxs.purr.server.application.model.CallHistoryResult
 import life.fxs.purr.server.application.model.CallOutcome
 import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.application.port.CallSessionStore
+import life.fxs.purr.server.model.CallDurationPolicy
 
 class CallHistoryQueryService(
     private val pairService: PairService,
@@ -74,7 +75,9 @@ internal fun CallRecord.toHistoryItem(userId: String): CallHistoryItemResult {
         connectedAtEpochMillis = connectedAt,
         endedAtEpochMillis = endedAt,
         ringingDurationMillis = ((connectedAt ?: endedAt) - startedAtEpochMillis).coerceAtLeast(0L),
-        durationMillis = connectedAt?.let { (endedAt - it).coerceAtLeast(0L) } ?: 0L,
+        durationMillis = durationMillis
+            ?: CallDurationPolicy.completedDurationMillis(connectedAt, endedAt)
+            ?: 0L,
         recordingStatus = recordingStatus,
     )
 }

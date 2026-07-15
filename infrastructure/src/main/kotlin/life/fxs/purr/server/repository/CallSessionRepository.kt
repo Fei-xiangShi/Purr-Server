@@ -8,6 +8,7 @@ import life.fxs.purr.server.application.port.EndCallResolution
 import life.fxs.purr.server.application.model.CallHistoryCursor
 import life.fxs.purr.server.db.table.CallSessionsTable
 import life.fxs.purr.server.db.table.PairBondsTable
+import life.fxs.purr.server.model.CallDurationPolicy
 import life.fxs.purr.server.model.CallState
 import life.fxs.purr.server.model.RecordingStatus
 import org.jetbrains.exposed.sql.ResultRow
@@ -107,6 +108,15 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
         expectedStates: List<String>,
     ): EndCallResolution? {
         val updatedRows = transaction {
+            val candidate = CallSessionsTable.selectAll()
+                .where {
+                    (CallSessionsTable.callId eq callId) and
+                        (CallSessionsTable.callState inList expectedStates)
+                }
+                .forUpdate()
+                .singleOrNull()
+                ?: return@transaction 0
+            val connectedAtEpochMillis = candidate[CallSessionsTable.connectedAtEpochMillis]
             CallSessionsTable.update(
                 where = {
                     (CallSessionsTable.callId eq callId) and
@@ -116,6 +126,10 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
                 it[callState] = CallState.ENDED.wireValue
                 it[activePairId] = null
                 it[CallSessionsTable.endedAtEpochMillis] = endedAtEpochMillis
+                it[durationMillis] = CallDurationPolicy.completedDurationMillis(
+                    connectedAtEpochMillis = connectedAtEpochMillis,
+                    endedAtEpochMillis = endedAtEpochMillis,
+                )
                 it[roomEmptySinceEpochMillis] = null
                 it[updatedAtEpochMillis] = endedAtEpochMillis
             }
@@ -125,12 +139,39 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
     }
 
     override fun claimRecordingStart(callId: String, updatedAtEpochMillis: Long): CallRecord? {
+        return claimRecordingStartInternal(
+            callId = callId,
+            updatedAtEpochMillis = updatedAtEpochMillis,
+            latestEligibleConnectedAtEpochMillis = null,
+        )
+    }
+
+    override fun claimRecordingStartAfterMinimumDuration(
+        callId: String,
+        updatedAtEpochMillis: Long,
+        minimumConnectedDurationMillis: Long,
+    ): CallRecord? = claimRecordingStartInternal(
+        callId = callId,
+        updatedAtEpochMillis = updatedAtEpochMillis,
+        latestEligibleConnectedAtEpochMillis = updatedAtEpochMillis - minimumConnectedDurationMillis,
+    )
+
+    private fun claimRecordingStartInternal(
+        callId: String,
+        updatedAtEpochMillis: Long,
+        latestEligibleConnectedAtEpochMillis: Long?,
+    ): CallRecord? {
         val updatedRows = transaction {
             CallSessionsTable.update(
                 where = {
+                    val eligibleConnection = latestEligibleConnectedAtEpochMillis?.let {
+                        CallSessionsTable.connectedAtEpochMillis.isNotNull() and
+                            (CallSessionsTable.connectedAtEpochMillis lessEq it)
+                    } ?: org.jetbrains.exposed.sql.Op.TRUE
                     (CallSessionsTable.callId eq callId) and
                         (CallSessionsTable.callState eq CallState.ACTIVE.wireValue) and
-                        (CallSessionsTable.recordingStatus inList startableRecordingStatuses)
+                        (CallSessionsTable.recordingStatus inList startableRecordingStatuses) and
+                        eligibleConnection
                 },
             ) {
                 it[recordingStatus] = RecordingStatus.STARTING.wireValue
@@ -139,6 +180,7 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
                 it[recordingRecoveryAttempts] = 0
                 it[recordingLastRecoveryAtEpochMillis] = null
                 it[recordingErrorMessage] = null
+                it[CallSessionsTable.updatedAtEpochMillis] = updatedAtEpochMillis
             }
         }
         if (updatedRows == 0) {
@@ -181,7 +223,9 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
         val endedCalls =
             (CallSessionsTable.pairId eq pairId) and
                 (CallSessionsTable.callState eq CallState.ENDED.wireValue) and
-                CallSessionsTable.endedAtEpochMillis.isNotNull()
+                CallSessionsTable.endedAtEpochMillis.isNotNull() and
+                CallSessionsTable.connectedAtEpochMillis.isNotNull() and
+                (CallSessionsTable.durationMillis greaterEq CallDurationPolicy.MINIMUM_HISTORY_DURATION_MILLIS)
         val condition = cursor?.let {
             endedCalls and (
                 (CallSessionsTable.startedAtEpochMillis less it.startedAtEpochMillis) or
@@ -212,6 +256,8 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
             (CallSessionsTable.pairId eq pairId) and
                 (CallSessionsTable.callState eq CallState.ENDED.wireValue) and
                 CallSessionsTable.endedAtEpochMillis.isNotNull() and
+                CallSessionsTable.connectedAtEpochMillis.isNotNull() and
+                (CallSessionsTable.durationMillis greaterEq CallDurationPolicy.MINIMUM_HISTORY_DURATION_MILLIS) and
                 (CallSessionsTable.startedAtEpochMillis greaterEq fromEpochMillis) and
                 (CallSessionsTable.startedAtEpochMillis less toEpochMillis)
         val condition = cursor?.let {
@@ -371,6 +417,7 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
         recordingErrorMessage = this[CallSessionsTable.recordingErrorMessage],
         endedAtEpochMillis = this[CallSessionsTable.endedAtEpochMillis],
         connectedAtEpochMillis = this[CallSessionsTable.connectedAtEpochMillis],
+        durationMillis = this[CallSessionsTable.durationMillis],
         roomEmptySinceEpochMillis = this[CallSessionsTable.roomEmptySinceEpochMillis],
     )
 
@@ -392,6 +439,10 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
             it[recordingProviderUpdatedAtEpochMillis] = call.recordingProviderUpdatedAtEpochMillis
             it[endedAtEpochMillis] = call.endedAtEpochMillis
             it[connectedAtEpochMillis] = call.connectedAtEpochMillis
+            it[durationMillis] = call.durationMillis ?: CallDurationPolicy.completedDurationMillis(
+                connectedAtEpochMillis = call.connectedAtEpochMillis,
+                endedAtEpochMillis = call.endedAtEpochMillis,
+            )
             it[roomEmptySinceEpochMillis] = call.roomEmptySinceEpochMillis
             it[callState] = call.state.wireValue
             it[recordingStatus] = call.recordingStatus.wireValue

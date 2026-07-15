@@ -21,7 +21,7 @@ import life.fxs.purr.server.repository.UserRepository
 
 class RecordingCommandDispatcherTest {
     @Test
-    fun `ended call before start dispatch completes start and stop without provider IO`() = withDatabase {
+    fun `call ending before thirty seconds completes delayed start without provider IO`() = withDatabase {
         seedPair()
         val callRepository = CallSessionRepository()
         callRepository.upsert(
@@ -31,11 +31,12 @@ class RecordingCommandDispatcherTest {
                 roomName = ROOM_NAME,
                 createdByUserId = "user-a",
                 startedAtEpochMillis = 100L,
-                updatedAtEpochMillis = 200L,
+                updatedAtEpochMillis = 30_099L,
                 state = CallState.ENDED,
-                recordingStatus = RecordingStatus.STOPPING,
-                endedAtEpochMillis = 200L,
+                recordingStatus = RecordingStatus.IDLE,
+                endedAtEpochMillis = 30_099L,
                 connectedAtEpochMillis = 100L,
+                durationMillis = 29_999L,
             ),
         )
         val ids = AtomicInteger()
@@ -43,8 +44,12 @@ class RecordingCommandDispatcherTest {
             callRecordingRepository = CallRecordingRepository(),
             commandIdProvider = { "command-${ids.incrementAndGet()}" },
         )
-        commandRepository.enqueueStart(CALL_ID, ROOM_NAME, requestedAtEpochMillis = 100L)
-        commandRepository.enqueueStop(CALL_ID, ROOM_NAME, recordingId = null, requestedAtEpochMillis = 200L)
+        commandRepository.enqueueStart(
+            CALL_ID,
+            ROOM_NAME,
+            requestedAtEpochMillis = 100L,
+            availableAtEpochMillis = 30_100L,
+        )
         val controller = RecordingControllerSpy()
         val dispatcher = RecordingCommandDispatcher(
             config = outboxConfig(),
@@ -54,17 +59,63 @@ class RecordingCommandDispatcherTest {
             workerId = "worker-1",
         )
 
-        val startSummary = dispatcher.dispatchOnce(Instant.ofEpochMilli(1_000L))
-        val stopSummary = dispatcher.dispatchOnce(Instant.ofEpochMilli(1_001L))
+        val startSummary = dispatcher.dispatchOnce(Instant.ofEpochMilli(30_100L))
 
         assertEquals(1, startSummary.claimed)
         assertEquals(1, startSummary.succeeded)
-        assertEquals(1, stopSummary.claimed)
-        assertEquals(1, stopSummary.succeeded)
         assertEquals(0, controller.startCalls)
         assertEquals(0, controller.stopCalls)
-        assertEquals(RecordingStatus.STOPPED, callRepository.find(CALL_ID)?.recordingStatus)
+        assertEquals(RecordingStatus.IDLE, callRepository.find(CALL_ID)?.recordingStatus)
         assertEquals(null, callRepository.find(CALL_ID)?.recordingId)
+        dispatcher.close()
+    }
+
+    @Test
+    fun `delayed start becomes executable at exactly thirty seconds`() = withDatabase {
+        seedPair()
+        val callRepository = CallSessionRepository()
+        callRepository.upsert(
+            CallRecord(
+                callId = CALL_ID,
+                pairId = PAIR_ID,
+                roomName = ROOM_NAME,
+                createdByUserId = "user-a",
+                startedAtEpochMillis = 100L,
+                updatedAtEpochMillis = 100L,
+                state = CallState.ACTIVE,
+                recordingStatus = RecordingStatus.IDLE,
+                connectedAtEpochMillis = 100L,
+            ),
+        )
+        val commandRepository = RecordingCommandRepository(
+            callRecordingRepository = CallRecordingRepository(),
+            commandIdProvider = { "command-1" },
+        )
+        commandRepository.enqueueStart(
+            CALL_ID,
+            ROOM_NAME,
+            requestedAtEpochMillis = 100L,
+            availableAtEpochMillis = 30_100L,
+        )
+        val controller = StartingRecordingController()
+        val dispatcher = RecordingCommandDispatcher(
+            config = outboxConfig(),
+            repository = commandRepository,
+            callSessionStore = callRepository,
+            recordingController = controller,
+            workerId = "worker-1",
+        )
+
+        val early = dispatcher.dispatchOnce(Instant.ofEpochMilli(30_099L))
+        val eligible = dispatcher.dispatchOnce(Instant.ofEpochMilli(30_100L))
+        val duplicate = dispatcher.dispatchOnce(Instant.ofEpochMilli(30_101L))
+
+        assertEquals(0, early.claimed)
+        assertEquals(1, eligible.claimed)
+        assertEquals(1, eligible.succeeded)
+        assertEquals(0, duplicate.claimed)
+        assertEquals(1, controller.startCalls)
+        assertEquals(RecordingStatus.RECORDING, callRepository.find(CALL_ID)?.recordingStatus)
         dispatcher.close()
     }
 
@@ -240,6 +291,25 @@ class RecordingCommandDispatcherTest {
                 updatedAtEpochMillis = 2_000L,
             )
         }
+    }
+
+    private class StartingRecordingController : RecordingController {
+        var startCalls = 0
+
+        override fun startRecording(callId: String, roomName: String): ProviderRecordingResult {
+            startCalls++
+            return ProviderRecordingResult(
+                status = RecordingStatus.RECORDING,
+                recordingId = "egress-1",
+                updatedAtEpochMillis = 30_100L,
+            )
+        }
+
+        override fun stopRecording(
+            callId: String,
+            roomName: String,
+            currentRecordingId: String?,
+        ): ProviderRecordingResult = error("Not used")
     }
 
     private companion object {

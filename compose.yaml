@@ -198,6 +198,9 @@ services:
         condition: service_started
     ports:
       - "127.0.0.1:8080:8080"
+    secrets:
+      - source: purr-fcm-service-account
+        target: purr-fcm-service-account.json
     environment:
       PURR_ENVIRONMENT: production
       PURR_LOG_LEVEL: ${PURR_LOG_LEVEL:-INFO}
@@ -262,6 +265,11 @@ services:
       PURR_OUTBOX_MAX_ATTEMPTS: ${PURR_OUTBOX_MAX_ATTEMPTS:-10}
       PURR_OUTBOX_RETRY_BASE_SECONDS: ${PURR_OUTBOX_RETRY_BASE_SECONDS:-1}
       PURR_OUTBOX_RETRY_MAX_SECONDS: ${PURR_OUTBOX_RETRY_MAX_SECONDS:-300}
+      PURR_PUSH_ENABLED: true
+      PURR_PUSH_PROVIDER: fcm
+      PURR_PUSH_FCM_PROJECT_ID: ${PURR_PUSH_FCM_PROJECT_ID:?PURR_PUSH_FCM_PROJECT_ID is required}
+      PURR_PUSH_FCM_SERVICE_ACCOUNT_PATH: /run/secrets/purr-fcm-service-account.json
+      PURR_PUSH_MESSAGE_TTL_SECONDS: ${PURR_PUSH_MESSAGE_TTL_SECONDS:-60}
       # Production call convergence is enabled by default. These values are
       # operational policy defaults; deployments may override them through .env.
       PURR_CALL_RECONCILIATION_ENABLED: ${PURR_CALL_RECONCILIATION_ENABLED:-true}
@@ -291,6 +299,10 @@ volumes:
   minio-data:
   caddy-data:
   caddy-config:
+
+secrets:
+  purr-fcm-service-account:
+    file: ${PURR_PUSH_FCM_SERVICE_ACCOUNT_FILE:?PURR_PUSH_FCM_SERVICE_ACCOUNT_FILE is required}
 
 networks:
   default:

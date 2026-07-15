@@ -4,6 +4,7 @@ import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
+import io.ktor.client.request.delete
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.put
@@ -15,6 +16,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
 import java.security.MessageDigest
+import java.sql.DriverManager
 import java.util.Base64
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -207,6 +209,76 @@ class PurrRoutesTest {
     }
 
     @Test
+    fun `push registration is validated and removed when its auth session rotates`() = testApplication {
+        val tokens = client.loginWithRefreshToken("user-a", "pass-a")
+        val installationId = "550e8400-e29b-41d4-a716-446655440000"
+        val token = "fcm-token-abcdefghijklmnopqrstuvwxyz-0123456789"
+
+        val registered = client.put("/devices/push/$installationId") {
+            header(HttpHeaders.Authorization, "Bearer ${tokens.accessToken}")
+            contentType(ContentType.Application.Json)
+            setBody("""{"provider":"FCM","token":"$token"}""")
+        }
+        assertEquals(HttpStatusCode.NoContent, registered.status)
+        assertEquals(1, countPushDevices(installationId))
+
+        val invalidProvider = client.put("/devices/push/$installationId") {
+            header(HttpHeaders.Authorization, "Bearer ${tokens.accessToken}")
+            contentType(ContentType.Application.Json)
+            setBody("""{"provider":"APNS","token":"$token"}""")
+        }
+        assertEquals(HttpStatusCode.BadRequest, invalidProvider.status)
+
+        val invalidToken = client.put("/devices/push/$installationId") {
+            header(HttpHeaders.Authorization, "Bearer ${tokens.accessToken}")
+            contentType(ContentType.Application.Json)
+            setBody("""{"provider":"FCM","token":"short"}""")
+        }
+        assertEquals(HttpStatusCode.BadRequest, invalidToken.status)
+
+        val invalidInstallation = client.put("/devices/push/short") {
+            header(HttpHeaders.Authorization, "Bearer ${tokens.accessToken}")
+            contentType(ContentType.Application.Json)
+            setBody("""{"provider":"FCM","token":"$token"}""")
+        }
+        assertEquals(HttpStatusCode.BadRequest, invalidInstallation.status)
+
+        val refreshed = client.post("/auth/refresh") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"refreshToken":"${tokens.refreshToken}"}""")
+        }
+        assertEquals(HttpStatusCode.OK, refreshed.status)
+        assertEquals(0, countPushDevices(installationId))
+    }
+
+    @Test
+    fun `push unregister is scoped to the authenticated user`() = testApplication {
+        val userAToken = client.login("user-a", "pass-a")
+        val userBToken = client.login("user-b", "pass-b")
+        val installationId = "550e8400-e29b-41d4-a716-446655440001"
+        val token = "fcm-token-bcdefghijklmnopqrstuvwxyz-0123456789"
+
+        val registered = client.put("/devices/push/$installationId") {
+            header(HttpHeaders.Authorization, "Bearer $userAToken")
+            contentType(ContentType.Application.Json)
+            setBody("""{"provider":"FCM","token":"$token"}""")
+        }
+        assertEquals(HttpStatusCode.NoContent, registered.status)
+
+        val otherUserDelete = client.delete("/devices/push/$installationId") {
+            header(HttpHeaders.Authorization, "Bearer $userBToken")
+        }
+        assertEquals(HttpStatusCode.NoContent, otherUserDelete.status)
+        assertEquals(1, countPushDevices(installationId))
+
+        val ownerDelete = client.delete("/devices/push/$installationId") {
+            header(HttpHeaders.Authorization, "Bearer $userAToken")
+        }
+        assertEquals(HttpStatusCode.NoContent, ownerDelete.status)
+        assertEquals(0, countPushDevices(installationId))
+    }
+
+    @Test
     fun `refresh token can only be consumed once under concurrency`() = testApplication {
         val login = client.post("/auth/login") {
             contentType(ContentType.Application.Json)
@@ -249,7 +321,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `recording starts when second participant joins and stops after everyone leaves`() = testApplication {
+    fun `recording starts only after thirty seconds and valid calls remain pageable`() = testApplication {
         val userAToken = client.login("user-a", "pass-a")
         val userBToken = client.login("user-b", "pass-b")
 
@@ -330,7 +402,14 @@ class PurrRoutesTest {
         assertTrue(afterSecondJoinBody.contains("\"state\":\"active\""), "active after second join: $afterSecondJoinBody")
         assertTrue(afterSecondJoinBody.contains("\"startedAtEpochMillis\":"), "started timestamp after join: $afterSecondJoinBody")
         assertTrue(afterSecondJoinBody.contains("\"durationMillis\":"), "duration after join: $afterSecondJoinBody")
-        assertTrue(afterSecondJoinBody.contains("\"recordingStatus\":\"recording\""), "recording after second join: $afterSecondJoinBody")
+        assertTrue(afterSecondJoinBody.contains("\"recordingStatus\":\"idle\""), "recording remains idle before threshold: $afterSecondJoinBody")
+
+        makeCallRecordingEligible(callId, releaseStartCommand = true)
+        val startRecording = client.post("/calls/$callId/recording/start") {
+            header("Authorization", "Bearer $userAToken")
+        }
+        assertEquals(HttpStatusCode.OK, startRecording.status)
+        assertTrue(startRecording.bodyAsText().contains("\"status\":\"recording\""))
 
         client.postLiveKitWebhook(
             body = """
@@ -441,6 +520,7 @@ class PurrRoutesTest {
                 """.trimIndent(),
             )
         }
+        makeCallRecordingEligible(nextCallId, releaseStartCommand = false)
         listOf(
             Triple("a-left", 1, "user-a-$nextCallId"),
             Triple("b-left", 0, "user-b-$nextCallId"),
@@ -577,7 +657,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `recording stop is rejected while egress is still starting`() = testApplication {
+    fun `explicit recording start is rejected before thirty seconds`() = testApplication {
         val userAToken = client.login("user-a", "pass-a")
         val userBToken = client.login("user-b", "pass-b")
 
@@ -617,7 +697,7 @@ class PurrRoutesTest {
             header("Authorization", "Bearer $userAToken")
         }
         assertEquals(HttpStatusCode.Conflict, startRecording.status)
-        assertTrue(startRecording.bodyAsText().contains("already in progress"))
+        assertTrue(startRecording.bodyAsText().contains("after 30 seconds"))
 
         val endCall = client.post("/calls/$callId/end") {
             header("Authorization", "Bearer $userAToken")
@@ -629,7 +709,7 @@ class PurrRoutesTest {
         }
         assertEquals(HttpStatusCode.OK, endedCall.status)
         assertTrue(endedCall.bodyAsText().contains("\"state\":\"ended\""))
-        assertTrue(endedCall.bodyAsText().contains("\"recordingStatus\":\"stopped\""))
+        assertTrue(endedCall.bodyAsText().contains("\"recordingStatus\":\"idle\""))
 
         val repeatedEnd = client.post("/calls/$callId/end") {
             header("Authorization", "Bearer $userBToken")
@@ -679,7 +759,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `history calendar day detail and telemetry form one production query flow`() = testApplication {
+    fun `unanswered short call is hidden from history but detail keeps telemetry`() = testApplication {
         val token = client.login("user-a", "pass-a")
         val session = client.post("/calls/session") {
             header(HttpHeaders.Authorization, "Bearer $token")
@@ -729,16 +809,14 @@ class PurrRoutesTest {
             header(HttpHeaders.Authorization, "Bearer $token")
         }
         assertEquals(HttpStatusCode.OK, calendar.status)
-        assertTrue(calendar.bodyAsText().contains("\"callCount\":"), "calendar call count field")
-        assertTrue(Regex("\\\"callCount\\\":[1-9][0-9]*").containsMatchIn(calendar.bodyAsText()), "calendar has a call")
+        assertTrue(calendar.bodyAsText().contains("\"days\":[]"), "calendar hides unanswered call")
 
         val day = client.get("/calls/history/day?from=$from&to=$to&limit=50") {
             header(HttpHeaders.Authorization, "Bearer $token")
         }
         val dayBody = day.bodyAsText()
         assertEquals(HttpStatusCode.OK, day.status)
-        assertTrue(dayBody.contains("\"callId\":\"$callId\""), "day contains call")
-        assertTrue(dayBody.contains("\"outcome\":\"cancelled\""), "outgoing unanswered call outcome")
+        assertTrue(dayBody.contains("\"calls\":[]"), "day hides unanswered call")
 
         val detail = client.get("/calls/$callId/details") {
             header(HttpHeaders.Authorization, "Bearer $token")
@@ -773,6 +851,73 @@ class PurrRoutesTest {
         assertEquals(HttpStatusCode.OK, response.status)
         return Regex("\\\"accessToken\\\":\\\"([^\\\"]+)\\\"").find(body)?.groupValues?.get(1)
             ?: error("Missing accessToken in $body")
+    }
+
+    private suspend fun HttpClient.loginWithRefreshToken(username: String, password: String): AuthTokens {
+        val response = post("/auth/login") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"username":"$username","password":"$password"}""")
+        }
+        val body = response.bodyAsText()
+        assertEquals(HttpStatusCode.OK, response.status)
+        return AuthTokens(
+            accessToken = body.requireJsonString("accessToken"),
+            refreshToken = body.requireJsonString("refreshToken"),
+        )
+    }
+
+    private fun String.requireJsonString(name: String): String =
+        Regex("\\\"$name\\\":\\\"([^\\\"]+)\\\"").find(this)?.groupValues?.get(1)
+            ?: error("Missing $name in $this")
+
+    private fun countPushDevices(installationId: String): Int = DriverManager.getConnection(
+        "jdbc:h2:mem:purr;MODE=PostgreSQL;DB_CLOSE_DELAY=0",
+        "sa",
+        "",
+    ).use { connection ->
+        connection.prepareStatement(
+            "SELECT COUNT(*) FROM push_devices WHERE installation_id = ?",
+        ).use { statement ->
+            statement.setString(1, installationId)
+            statement.executeQuery().use { result ->
+                check(result.next())
+                result.getInt(1)
+            }
+        }
+    }
+
+    private data class AuthTokens(
+        val accessToken: String,
+        val refreshToken: String,
+    )
+
+    private fun makeCallRecordingEligible(callId: String, releaseStartCommand: Boolean) {
+        val nowEpochMillis = System.currentTimeMillis()
+        DriverManager.getConnection(
+            "jdbc:h2:mem:purr;MODE=PostgreSQL;DB_CLOSE_DELAY=0",
+            "sa",
+            "",
+        ).use { connection ->
+            connection.autoCommit = false
+            connection.prepareStatement(
+                "UPDATE call_sessions SET connected_at_epoch_millis = ?, updated_at_epoch_millis = ? WHERE call_id = ?",
+            ).use { statement ->
+                statement.setLong(1, nowEpochMillis - 30_000L)
+                statement.setLong(2, nowEpochMillis)
+                statement.setString(3, callId)
+                check(statement.executeUpdate() == 1)
+            }
+            if (releaseStartCommand) {
+                connection.prepareStatement(
+                    "UPDATE recording_commands SET available_at_epoch_millis = ? WHERE call_id = ? AND command_type = 'START'",
+                ).use { statement ->
+                    statement.setLong(1, nowEpochMillis)
+                    statement.setString(2, callId)
+                    check(statement.executeUpdate() == 1)
+                }
+            }
+            connection.commit()
+        }
     }
 
     private suspend fun HttpClient.postLiveKitWebhook(body: String) {

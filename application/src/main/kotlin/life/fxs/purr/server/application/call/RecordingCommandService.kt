@@ -14,6 +14,7 @@ import life.fxs.purr.server.application.port.RecordingCommandProcessor
 import life.fxs.purr.server.application.port.RecordingCommandStore
 import life.fxs.purr.server.application.port.RecordingConsentStore
 import life.fxs.purr.server.application.port.RecordingController
+import life.fxs.purr.server.model.CallDurationPolicy
 import life.fxs.purr.server.model.CallState
 import life.fxs.purr.server.model.RecordingStatus
 
@@ -47,6 +48,13 @@ class RecordingCommandService(
                 "Cannot start recording for ended call: $callId",
             )
         }
+        val requestedAt = nowProvider().toEpochMilli()
+        if (!CallDurationPolicy.isRecordingEligible(call.connectedAtEpochMillis, requestedAt)) {
+            throw ApplicationException(
+                ApplicationError.CONFLICT,
+                "Recording is available after 30 seconds of connected call time",
+            )
+        }
         when (call.recordingStatus) {
             RecordingStatus.STARTING,
             RecordingStatus.RECORDING,
@@ -62,25 +70,27 @@ class RecordingCommandService(
             -> Unit
         }
 
-        val requestedAt = nowProvider().toEpochMilli()
-        val claimed = transaction.execute {
-            val started = callSessionStore.claimRecordingStart(callId, requestedAt)
-                ?: return@execute null
-            recordingCommandStore?.enqueueStart(
-                callId = started.callId,
-                roomName = started.roomName,
-                requestedAtEpochMillis = requestedAt,
-            )
-            started
-        } ?: throw ApplicationException(
-            ApplicationError.CONFLICT,
-            "Recording is already in progress for call: $callId",
-        )
-
         if (recordingCommandStore != null) {
+            transaction.execute {
+                recordingCommandStore.enqueueStart(
+                    callId = call.callId,
+                    roomName = call.roomName,
+                    requestedAtEpochMillis = requestedAt,
+                    availableAtEpochMillis = requestedAt,
+                )
+            }
             recordingCommandProcessor?.processPending()
             return currentCall(callId).toResultView()
         }
+
+        val claimed = callSessionStore.claimRecordingStartAfterMinimumDuration(
+            callId = callId,
+            updatedAtEpochMillis = requestedAt,
+            minimumConnectedDurationMillis = CallDurationPolicy.MINIMUM_RECORDING_DURATION_MILLIS,
+        ) ?: throw ApplicationException(
+            ApplicationError.CONFLICT,
+            "Recording is already in progress for call: $callId",
+        )
 
         val controller = recordingController ?: throw ApplicationException(
             ApplicationError.EXTERNAL_DEPENDENCY,
