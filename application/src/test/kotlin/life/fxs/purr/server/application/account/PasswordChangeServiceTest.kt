@@ -75,7 +75,8 @@ class PasswordChangeServiceTest {
     }
 
     private fun service(accounts: UserAccountStore, sessions: AuthSessionStore) = PasswordChangeService(
-        userAccountStore = accounts,
+        userAccountReader = accounts,
+        userCredentialStore = accounts,
         authSessionStore = sessions,
         passwordVerifier = PasswordVerifier { password, hash -> hash == "hash:$password" },
         passwordHasher = PasswordHasher { password -> "hash:$password" },
@@ -110,17 +111,19 @@ private class FakeUserAccountStore(
         return true
     }
 
-    override fun updateAvatarUrl(userId: String, avatarUrl: String): Boolean {
-        if (user.userId != userId) return false
-        user = user.copy(avatarUrl = avatarUrl)
-        return true
-    }
+    override fun compareAndSetAvatar(
+        userId: String,
+        expectedVersion: Long,
+        objectKey: String,
+    ): Boolean = false
 
     override fun updateDisplayName(userId: String, displayName: String): Boolean {
         if (user.userId != userId) return false
         user = user.copy(displayName = displayName)
         return true
     }
+
+    override fun findReferencedObjectKeys(candidates: Set<String>) = emptySet<String>()
 }
 
 private class FakeAuthSessionStore : AuthSessionStore {

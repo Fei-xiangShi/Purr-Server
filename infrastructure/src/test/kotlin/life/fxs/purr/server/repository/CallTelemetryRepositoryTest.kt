@@ -23,10 +23,10 @@ class CallTelemetryRepositoryTest {
         ).connect()
         try {
             UserRepository().apply {
-                upsert("user-a", "user-a", "pass-a", "A", null)
-                upsert("user-b", "user-b", "pass-b", "B", null)
+                insertIfAbsent("user-a", "user-a", "pass-a", "A", null)
+                insertIfAbsent("user-b", "user-b", "pass-b", "B", null)
             }
-            PairBondRepository().upsert("pair-1", "user-a", "user-b", 1L)
+            PairBondRepository().insertIfAbsent("pair-1", "user-a", "user-b", 1L)
             CallSessionRepository().upsert(
                 CallRecord(
                     callId = "call-1",

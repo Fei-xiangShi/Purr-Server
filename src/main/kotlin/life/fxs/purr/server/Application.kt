@@ -25,8 +25,13 @@ fun main(args: Array<String>) {
 
 fun Application.module(config: ApplicationConfig = environment.config) {
     val purrConfig = PurrConfigLoader.load(config)
-    val dependencies = ServerDependenciesFactory.create(purrConfig)
     val serverMetrics = ServerMetrics()
+    val dependencies = try {
+        ServerDependenciesFactory.create(purrConfig, serverMetrics)
+    } catch (error: Throwable) {
+        serverMetrics.close()
+        throw error
+    }
     environment.monitor.subscribe(ApplicationStopped) {
         try {
             dependencies.close()

@@ -82,6 +82,55 @@ class PurrConfigLoaderTest {
     }
 
     @Test
+    fun `production avatar storage requires TLS cleanup and strong credentials`() {
+        val insecureEndpoint = validProductionConfig().copy(
+            avatar = validProductionConfig().avatar.copy(publicEndpoint = "http://avatars.example.com"),
+        )
+        val cleanupDisabled = validProductionConfig().copy(
+            avatar = validProductionConfig().avatar.copy(cleanupEnabled = false),
+        )
+        val placeholderSecret = validProductionConfig().copy(
+            avatar = validProductionConfig().avatar.copy(secretKey = "change-me-avatar-key"),
+        )
+
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(insecureEndpoint) }
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(cleanupDisabled) }
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(placeholderSecret) }
+    }
+
+    @Test
+    fun `production storage endpoints are structured and credentials are isolated`() {
+        val missingHost = validProductionConfig().copy(
+            avatar = validProductionConfig().avatar.copy(publicEndpoint = "https://"),
+        )
+        val endpointPath = validProductionConfig().copy(
+            avatar = validProductionConfig().avatar.copy(endpoint = "http://minio:9000/private"),
+        )
+        val sharedAccessKey = validProductionConfig().copy(
+            avatar = validProductionConfig().avatar.copy(
+                accessKey = validProductionConfig().recording.accessKey,
+            ),
+        )
+        val sharedSecretKey = validProductionConfig().copy(
+            avatar = validProductionConfig().avatar.copy(
+                secretKey = validProductionConfig().recording.secretKey,
+            ),
+        )
+        val dottedVirtualHostBucket = validProductionConfig().copy(
+            avatar = validProductionConfig().avatar.copy(
+                bucket = "purr.avatars",
+                forcePathStyle = false,
+            ),
+        )
+
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(missingHost) }
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(endpointPath) }
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(sharedAccessKey) }
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(sharedSecretKey) }
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(dottedVirtualHostBucket) }
+    }
+
+    @Test
     fun `pair users must match unique seed users`() {
         val duplicateUsers = validProductionConfig().copy(
             auth = validProductionConfig().auth.copy(
@@ -192,6 +241,28 @@ class PurrConfigLoaderTest {
             cleanupIntervalSeconds = 3600,
             cleanupBatchSize = 100,
             cleanupMaxAttempts = 10,
+        ),
+        avatar = AvatarConfig(
+            bucket = "purr-avatars",
+            endpoint = "http://minio:9000",
+            publicEndpoint = "https://avatars.example.com",
+            accessKey = "purr-avatar",
+            secretKey = "a-strong-avatar-secret",
+            region = "us-east-1",
+            forcePathStyle = true,
+            outputSizePixels = 512,
+            maxSourceDimensionPixels = 8192,
+            maxSourcePixels = 40_000_000,
+            jpegQualityPercent = 88,
+            maxOutputBytes = 1_048_576,
+            maxConcurrentProcessing = 2,
+            cleanupEnabled = true,
+            cleanupIntervalSeconds = 60,
+            cleanupBatchSize = 100,
+            cleanupMaxAttempts = 20,
+            cleanupRetryBaseSeconds = 5,
+            cleanupRetryMaxSeconds = 3600,
+            orphanGraceSeconds = 3600,
         ),
         realtime = RealtimeConfig(
             provider = RealtimeProvider.REDIS,

@@ -25,9 +25,9 @@ class CallSessionRepositoryTest {
 
         try {
             val users = UserRepository()
-            users.upsert("user-a", "user-a", "pass-a", "A", null)
-            users.upsert("user-b", "user-b", "pass-b", "B", null)
-            PairBondRepository().upsert("pair-1", "user-a", "user-b", 1L)
+            users.insertIfAbsent("user-a", "user-a", "pass-a", "A", null)
+            users.insertIfAbsent("user-b", "user-b", "pass-b", "B", null)
+            PairBondRepository().insertIfAbsent("pair-1", "user-a", "user-b", 1L)
             val repository = CallSessionRepository()
             repository.upsert(call("call-old", 1_000L, 2_000L, 32_000L))
             repository.upsert(call("call-new", 5_000L, 6_000L, 36_001L))
@@ -67,9 +67,9 @@ class CallSessionRepositoryTest {
 
         try {
             val users = UserRepository()
-            users.upsert("user-a", "user-a", "pass-a", "A", null)
-            users.upsert("user-b", "user-b", "pass-b", "B", null)
-            PairBondRepository().upsert("pair-1", "user-a", "user-b", 1L)
+            users.insertIfAbsent("user-a", "user-a", "pass-a", "A", null)
+            users.insertIfAbsent("user-b", "user-b", "pass-b", "B", null)
+            PairBondRepository().insertIfAbsent("pair-1", "user-a", "user-b", 1L)
             val repository = CallSessionRepository()
             repository.upsert(call("call-active", 1_000L, 1_000L, null))
 
@@ -99,9 +99,9 @@ class CallSessionRepositoryTest {
 
         try {
             val users = UserRepository()
-            users.upsert("user-a", "user-a", "pass-a", "A", null)
-            users.upsert("user-b", "user-b", "pass-b", "B", null)
-            PairBondRepository().upsert("pair-1", "user-a", "user-b", 1L)
+            users.insertIfAbsent("user-a", "user-a", "pass-a", "A", null)
+            users.insertIfAbsent("user-b", "user-b", "pass-b", "B", null)
+            PairBondRepository().insertIfAbsent("pair-1", "user-a", "user-b", 1L)
             val repository = CallSessionRepository()
             repository.upsert(call("call-exact", 500L, 1_000L, null))
 

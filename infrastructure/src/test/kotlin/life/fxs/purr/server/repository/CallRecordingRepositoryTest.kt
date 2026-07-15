@@ -62,9 +62,9 @@ class CallRecordingRepositoryTest {
     private fun seedCall() {
         val users = UserRepository()
         val pairs = PairBondRepository()
-        users.upsert("user-a", "user-a", "pass-a", "User A", null)
-        users.upsert("user-b", "user-b", "pass-b", "User B", null)
-        pairs.upsert("pair-1", "user-a", "user-b", 1L)
+        users.insertIfAbsent("user-a", "user-a", "pass-a", "User A", null)
+        users.insertIfAbsent("user-b", "user-b", "pass-b", "User B", null)
+        pairs.insertIfAbsent("pair-1", "user-a", "user-b", 1L)
         CallSessionRepository().upsert(
             CallRecord(
                 callId = CALL_ID,

@@ -5,7 +5,7 @@ import life.fxs.purr.server.model.RecordingStatus
 
 data class CreateCallSessionCommand(
     val pairId: String,
-    val resumeCallId: String?,
+    val expectedCallId: String?,
     val recordingConsent: Boolean,
 )
 
@@ -16,6 +16,7 @@ data class CallSessionResult(
     val participantIdentity: String,
     val token: String,
     val wsUrl: String,
+    val createdByRequest: Boolean,
 )
 
 data class CallStatusResult(

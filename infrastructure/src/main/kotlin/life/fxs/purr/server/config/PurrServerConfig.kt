@@ -6,6 +6,7 @@ data class PurrServerConfig(
     val pair: PairConfig,
     val liveKit: LiveKitConfig,
     val recording: RecordingConfig,
+    val avatar: AvatarConfig,
     val realtime: RealtimeConfig,
     val outbox: OutboxConfig,
     val push: PushConfig,
@@ -81,6 +82,29 @@ enum class RecordingProvider {
     LIVEKIT,
     IN_MEMORY,
 }
+
+data class AvatarConfig(
+    val bucket: String,
+    val endpoint: String,
+    val publicEndpoint: String,
+    val accessKey: String,
+    val secretKey: String,
+    val region: String,
+    val forcePathStyle: Boolean,
+    val outputSizePixels: Int,
+    val maxSourceDimensionPixels: Int,
+    val maxSourcePixels: Long,
+    val jpegQualityPercent: Int,
+    val maxOutputBytes: Int,
+    val maxConcurrentProcessing: Int,
+    val cleanupEnabled: Boolean,
+    val cleanupIntervalSeconds: Long,
+    val cleanupBatchSize: Int,
+    val cleanupMaxAttempts: Int,
+    val cleanupRetryBaseSeconds: Long,
+    val cleanupRetryMaxSeconds: Long,
+    val orphanGraceSeconds: Long,
+)
 
 data class RealtimeConfig(
     val provider: RealtimeProvider,

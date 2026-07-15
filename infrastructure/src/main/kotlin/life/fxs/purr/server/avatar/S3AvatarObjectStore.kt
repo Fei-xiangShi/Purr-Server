@@ -3,8 +3,14 @@ package life.fxs.purr.server.avatar
 import java.net.URI
 import java.time.Duration
 import java.util.UUID
-import life.fxs.purr.server.application.port.AvatarObjectStore
+import life.fxs.purr.server.application.port.AvatarObjectCatalog
+import life.fxs.purr.server.application.port.AvatarObjectDeleter
+import life.fxs.purr.server.application.port.AvatarObjectUploader
+import life.fxs.purr.server.application.port.AvatarStorageReadiness
 import life.fxs.purr.server.application.port.StoredAvatar
+import life.fxs.purr.server.application.port.StoredAvatarObject
+import life.fxs.purr.server.application.port.StoredAvatarPage
+import life.fxs.purr.server.config.AvatarConfig
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
@@ -13,11 +19,13 @@ import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.s3.S3Client
 import software.amazon.awssdk.services.s3.S3Configuration
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest
+import software.amazon.awssdk.services.s3.model.HeadBucketRequest
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Request
 import software.amazon.awssdk.services.s3.model.PutObjectRequest
 
 class S3AvatarObjectStore(
-    private val config: AvatarStorageConfig,
-) : AvatarObjectStore, AutoCloseable {
+    private val config: AvatarConfig,
+) : AvatarObjectUploader, AvatarObjectDeleter, AvatarObjectCatalog, AvatarStorageReadiness, AutoCloseable {
     private val client = S3Client.builder()
         .endpointOverride(URI.create(config.endpoint))
         .region(Region.of(config.region))
@@ -36,36 +44,70 @@ class S3AvatarObjectStore(
         .build()
 
     override fun put(userId: String, contentType: String, bytes: ByteArray): StoredAvatar {
-        val extension = when (contentType) {
-            "image/jpeg" -> "jpg"
-            "image/png" -> "png"
-            "image/webp" -> "webp"
-            else -> error("Unsupported avatar content type: $contentType")
-        }
-        val key = "avatars/$userId/${UUID.randomUUID()}.$extension"
+        require(contentType == AVATAR_CONTENT_TYPE) { "Processed avatars must use $AVATAR_CONTENT_TYPE" }
+        require(userId.matches(USER_ID_PATTERN)) { "Invalid avatar owner ID" }
+        val key = "avatars/$userId/${UUID.randomUUID()}.jpg"
         client.putObject(
             PutObjectRequest.builder()
                 .bucket(config.bucket)
                 .key(key)
                 .contentType(contentType)
-                .cacheControl("public, max-age=86400")
+                .cacheControl("public, max-age=31536000, immutable")
                 .build(),
             RequestBody.fromBytes(bytes),
         )
-        return StoredAvatar(publicUrl(key))
+        return StoredAvatar(key)
     }
 
-    override fun deleteByUrl(url: String) {
-        val prefix = publicPrefix()
-        val key = url.removePrefix(prefix).takeIf { url.startsWith(prefix) } ?: return
-        client.deleteObject(DeleteObjectRequest.builder().bucket(config.bucket).key(key).build())
+    override fun delete(objectKey: String) {
+        require(objectKey.matches(OBJECT_KEY_PATTERN)) { "Invalid avatar object key" }
+        client.deleteObject(DeleteObjectRequest.builder().bucket(config.bucket).key(objectKey).build())
+    }
+
+    fun publicUrl(objectKey: String): String {
+        require(objectKey.matches(OBJECT_KEY_PATTERN)) { "Invalid avatar object key" }
+        return publicPrefix() + objectKey
+    }
+
+    override fun listObjects(continuationToken: String?, maxKeys: Int): StoredAvatarPage {
+        require(maxKeys in 1..MAX_LIST_KEYS) { "Avatar list page size is invalid" }
+        val response = client.listObjectsV2(
+            ListObjectsV2Request.builder()
+                .bucket(config.bucket)
+                .prefix(AVATAR_PREFIX)
+                .continuationToken(continuationToken)
+                .maxKeys(maxKeys)
+                .build(),
+        )
+        return StoredAvatarPage(
+            objects = response.contents().map { item ->
+                StoredAvatarObject(
+                    objectKey = item.key(),
+                    lastModifiedEpochMillis = item.lastModified().toEpochMilli(),
+                )
+            },
+            nextContinuationToken = response.nextContinuationToken(),
+        )
+    }
+
+    override fun isReady(): Boolean = try {
+        client.headBucket(
+            HeadBucketRequest.builder()
+                .bucket(config.bucket)
+                .overrideConfiguration { overrides ->
+                    overrides.apiCallAttemptTimeout(READINESS_TIMEOUT)
+                    overrides.apiCallTimeout(READINESS_TIMEOUT)
+                }
+                .build(),
+        )
+        true
+    } catch (_: Exception) {
+        false
     }
 
     override fun close() {
         client.close()
     }
-
-    private fun publicUrl(key: String): String = publicPrefix() + key
 
     private fun publicPrefix(): String {
         val endpoint = URI.create(config.publicEndpoint.trimEnd('/'))
@@ -85,17 +127,13 @@ class S3AvatarObjectStore(
     }
 
     private companion object {
+        const val AVATAR_CONTENT_TYPE = "image/jpeg"
+        const val AVATAR_PREFIX = "avatars/"
+        const val MAX_LIST_KEYS = 1_000
         val API_CALL_ATTEMPT_TIMEOUT: Duration = Duration.ofSeconds(5)
         val API_CALL_TIMEOUT: Duration = Duration.ofSeconds(15)
+        val READINESS_TIMEOUT: Duration = Duration.ofSeconds(2)
+        val USER_ID_PATTERN = Regex("[A-Za-z0-9._-]{1,64}")
+        val OBJECT_KEY_PATTERN = Regex("avatars/[A-Za-z0-9._-]{1,64}/[0-9a-fA-F-]{36}\\.jpg")
     }
 }
-
-data class AvatarStorageConfig(
-    val bucket: String,
-    val endpoint: String,
-    val publicEndpoint: String,
-    val accessKey: String,
-    val secretKey: String,
-    val region: String,
-    val forcePathStyle: Boolean,
-)

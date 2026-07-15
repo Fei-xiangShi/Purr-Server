@@ -1,6 +1,7 @@
 package life.fxs.purr.server.service
 
 import life.fxs.purr.server.auth.AuthContextResolver
+import life.fxs.purr.server.api.AvatarUploadAdmission
 import life.fxs.purr.server.application.account.AuthService
 import life.fxs.purr.server.application.account.AvatarService
 import life.fxs.purr.server.application.account.PasswordChangeService
@@ -12,6 +13,8 @@ import life.fxs.purr.server.application.port.PasswordVerifier
 import life.fxs.purr.server.application.port.PresenceStore
 import life.fxs.purr.server.application.port.RealtimeEventSink
 import life.fxs.purr.server.application.port.RecordingController
+import life.fxs.purr.server.application.port.AvatarTelemetry
+import life.fxs.purr.server.application.port.NoOpAvatarTelemetry
 import life.fxs.purr.server.auth.JwtTokenService
 import life.fxs.purr.server.config.PurrServerConfig
 import life.fxs.purr.server.config.RealtimeProvider
@@ -48,7 +51,11 @@ import life.fxs.purr.server.push.FcmPushNotificationSender
 import life.fxs.purr.server.push.IncomingCallPushEventSink
 import life.fxs.purr.server.recording.S3RecordingDownloadUrlProvider
 import life.fxs.purr.server.recording.S3RecordingObjectStore
-import life.fxs.purr.server.avatar.AvatarStorageConfig
+import life.fxs.purr.server.avatar.AvatarCleanupRepository
+import life.fxs.purr.server.avatar.AvatarCleanupService
+import life.fxs.purr.server.avatar.AvatarCleanupWorker
+import life.fxs.purr.server.avatar.AvatarOrphanReconciler
+import life.fxs.purr.server.avatar.JvmAvatarImageProcessor
 import life.fxs.purr.server.avatar.S3AvatarObjectStore
 import life.fxs.purr.server.recording.RecordingRetentionService
 import life.fxs.purr.server.ratelimit.AuthRateLimiter
@@ -77,6 +84,8 @@ data class ServerDependencies(
     val authService: AuthService,
     val passwordChangeService: PasswordChangeService,
     val avatarService: AvatarService,
+    val avatarUploadAdmission: AvatarUploadAdmission,
+    val avatarStorageReadiness: () -> Boolean,
     val profileService: ProfileService,
     val pairService: PairService,
     val pushDeviceService: PushDeviceService,
@@ -97,6 +106,7 @@ data class ServerDependencies(
     private val recordingDownloadResource: AutoCloseable,
     private val recordingObjectStoreResource: AutoCloseable,
     private val avatarObjectStoreResource: AutoCloseable,
+    private val avatarCleanupWorker: AvatarCleanupWorker,
     private val recordingRecoveryService: RecordingRecoveryService,
     private val recordingRetentionService: RecordingRetentionService,
     private val recordingCommandDispatcher: RecordingCommandDispatcher,
@@ -160,12 +170,17 @@ data class ServerDependencies(
             failure?.addSuppressed(error) ?: run { failure = error }
         }
         try {
+            avatarCleanupWorker.close()
+        } catch (error: Throwable) {
+            failure?.addSuppressed(error) ?: run { failure = error }
+        }
+        try {
             avatarObjectStoreResource.close()
         } catch (error: Throwable) {
             failure?.addSuppressed(error) ?: run { failure = error }
         }
         try {
-            (databaseResources.dataSource as? AutoCloseable)?.close()
+            databaseResources.close()
         } catch (error: Throwable) {
             failure?.addSuppressed(error) ?: run { failure = error }
         }
@@ -174,7 +189,10 @@ data class ServerDependencies(
 }
 
 object ServerDependenciesFactory {
-    fun create(config: PurrServerConfig): ServerDependencies {
+    fun create(
+        config: PurrServerConfig,
+        avatarTelemetry: AvatarTelemetry = NoOpAvatarTelemetry,
+    ): ServerDependencies {
         val databaseResources = DatabaseFactory(config.database).connect()
         val redisResources = RedisClientResources()
         var realtimeResource: AutoCloseable? = null
@@ -182,6 +200,7 @@ object ServerDependenciesFactory {
         var recordingDownloadResource: AutoCloseable? = null
         var recordingObjectStoreResource: AutoCloseable? = null
         var avatarObjectStoreResource: AutoCloseable? = null
+        var avatarCleanupWorkerResource: AvatarCleanupWorker? = null
         var recordingRecoveryService: RecordingRecoveryService? = null
         var recordingRetentionService: RecordingRetentionService? = null
         var recordingCommandDispatcher: RecordingCommandDispatcher? = null
@@ -189,7 +208,9 @@ object ServerDependenciesFactory {
         var outboxDispatcher: OutboxDispatcher? = null
 
         try {
-            val userRepository = UserRepository()
+            val avatarObjectStore = S3AvatarObjectStore(config.avatar)
+                .also { avatarObjectStoreResource = it }
+            val userRepository = UserRepository(avatarObjectStore::publicUrl)
             val pairBondRepository = PairBondRepository()
             val authSessionRepository = AuthSessionRepository()
             val callSessionRepository = CallSessionRepository()
@@ -200,6 +221,7 @@ object ServerDependenciesFactory {
             val callTelemetryRepository = CallTelemetryRepository()
             val presenceRepository = PresenceRepository()
             val pushDeviceRepository = PushDeviceRepository()
+            val avatarCleanupRepository = AvatarCleanupRepository()
             val applicationTransaction = databaseResources.applicationTransaction
             val outboxRepository = OutboxRepository()
             val realtimeHub = RealtimeHub()
@@ -243,13 +265,14 @@ object ServerDependenciesFactory {
             val authContextResolver = AuthContextResolver()
             val authService = AuthService(
                 refreshTokenTtlSeconds = config.auth.refreshTokenTtlSeconds,
-                userAccountStore = userRepository,
+                userAccountReader = userRepository,
                 authSessionStore = authSessionRepository,
                 accessTokenIssuer = jwtTokenService,
                 passwordVerifier = PasswordVerifier(BCrypt::checkpw),
             )
             val passwordChangeService = PasswordChangeService(
-                userAccountStore = userRepository,
+                userAccountReader = userRepository,
+                userCredentialStore = userRepository,
                 authSessionStore = authSessionRepository,
                 passwordVerifier = PasswordVerifier(BCrypt::checkpw),
                 passwordHasher = PasswordHasher { password ->
@@ -258,12 +281,13 @@ object ServerDependenciesFactory {
                 transaction = applicationTransaction,
             )
             val profileService = ProfileService(
-                userAccountStore = userRepository,
+                userAccountReader = userRepository,
+                userProfileStore = userRepository,
                 transaction = applicationTransaction,
             )
             val pairService = PairService(
                 pairStore = pairBondRepository,
-                userAccountStore = userRepository,
+                userAccountReader = userRepository,
                 presenceStore = presenceRepository,
             )
             val pushDeviceService = PushDeviceService(pushDeviceRepository)
@@ -293,22 +317,15 @@ object ServerDependenciesFactory {
                 .also { recordingDownloadResource = it }
             val recordingObjectStore = S3RecordingObjectStore(config.recording)
                 .also { recordingObjectStoreResource = it }
-            val avatarObjectStore = S3AvatarObjectStore(
-                AvatarStorageConfig(
-                    bucket = config.recording.bucket,
-                    endpoint = config.recording.endpoint,
-                    publicEndpoint = config.recording.publicEndpoint,
-                    accessKey = config.recording.accessKey,
-                    secretKey = config.recording.secretKey,
-                    region = config.recording.region,
-                    forcePathStyle = config.recording.forcePathStyle,
-                ),
-            )
-                .also { avatarObjectStoreResource = it }
             val avatarService = AvatarService(
-                userAccountStore = userRepository,
-                avatarObjectStore = avatarObjectStore,
+                userAccountReader = userRepository,
+                userProfileStore = userRepository,
+                imageProcessor = JvmAvatarImageProcessor(config.avatar),
+                avatarObjectUploader = avatarObjectStore,
+                avatarObjectDeleter = avatarObjectStore,
+                cleanupQueue = avatarCleanupRepository,
                 transaction = applicationTransaction,
+                telemetry = avatarTelemetry,
             )
             val callAccessPolicy = CallAccessPolicy(
                 pairService = pairService,
@@ -434,6 +451,22 @@ object ServerDependenciesFactory {
                 eventSink = durableEventSink,
             ).also { it.start() }
             outboxDispatcher = dispatcher
+            val avatarOrphanReconciler = AvatarOrphanReconciler(
+                config = config.avatar,
+                cleanupQueue = avatarCleanupRepository,
+                objectCatalog = avatarObjectStore,
+                referenceReader = userRepository,
+            )
+            val avatarCleanupService = AvatarCleanupService(
+                config = config.avatar,
+                taskStore = avatarCleanupRepository,
+                objectDeleter = avatarObjectStore,
+                orphanReconciler = avatarOrphanReconciler,
+                telemetry = avatarTelemetry,
+            )
+            val avatarCleanupWorker = AvatarCleanupWorker(config.avatar, avatarCleanupService)
+                .also { it.start() }
+            avatarCleanupWorkerResource = avatarCleanupWorker
             return ServerDependencies(
                 databaseResources = databaseResources,
                 authContextResolver = authContextResolver,
@@ -441,6 +474,8 @@ object ServerDependenciesFactory {
                 authService = authService,
                 passwordChangeService = passwordChangeService,
                 avatarService = avatarService,
+                avatarUploadAdmission = AvatarUploadAdmission(config.avatar.maxConcurrentProcessing),
+                avatarStorageReadiness = avatarObjectStore::isReady,
                 profileService = profileService,
                 pairService = pairService,
                 pushDeviceService = pushDeviceService,
@@ -461,6 +496,7 @@ object ServerDependenciesFactory {
                 recordingDownloadResource = recordingDownloadUrlProvider,
                 recordingObjectStoreResource = recordingObjectStore,
                 avatarObjectStoreResource = avatarObjectStore,
+                avatarCleanupWorker = avatarCleanupWorker,
                 recordingRecoveryService = recoveryService,
                 recordingRetentionService = retentionService,
                 recordingCommandDispatcher = commandDispatcher,
@@ -499,10 +535,13 @@ object ServerDependenciesFactory {
             runCatching { recordingObjectStoreResource?.close() }
                 .exceptionOrNull()
                 ?.let(error::addSuppressed)
+            runCatching { avatarCleanupWorkerResource?.close() }
+                .exceptionOrNull()
+                ?.let(error::addSuppressed)
             runCatching { avatarObjectStoreResource?.close() }
                 .exceptionOrNull()
                 ?.let(error::addSuppressed)
-            runCatching { (databaseResources.dataSource as? AutoCloseable)?.close() }
+            runCatching { databaseResources.close() }
                 .exceptionOrNull()
                 ?.let(error::addSuppressed)
             throw error

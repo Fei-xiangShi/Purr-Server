@@ -1,10 +1,22 @@
 {
 	admin off
 	email {$ACME_EMAIL}
+	servers {
+		timeouts {
+			read_body 30s
+			read_header 10s
+			write 30s
+			idle 2m
+		}
+		max_header_size 32KB
+	}
 }
 
 {$PURR_API_DOMAIN} {
 	encode zstd gzip
+	request_body {
+		max_size 11MB
+	}
 
 	@internal_metrics path /metrics
 	respond @internal_metrics 404
@@ -34,7 +46,20 @@
 }
 
 {$PURR_STORAGE_DOMAIN} {
-	reverse_proxy minio:9000
+	route {
+		@object_write_attempt {
+			path /purr-avatars/avatars/* /purr-recordings/*
+			not method GET HEAD
+		}
+		respond @object_write_attempt 405
+
+		@object_download {
+			method GET HEAD
+			path /purr-avatars/avatars/* /purr-recordings/*
+		}
+		reverse_proxy @object_download minio:9000
+		respond 404
+	}
 
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"

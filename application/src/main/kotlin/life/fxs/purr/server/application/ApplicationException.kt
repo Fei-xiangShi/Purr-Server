@@ -12,4 +12,5 @@ enum class ApplicationError {
     INVALID_ARGUMENT,
     CONFLICT,
     EXTERNAL_DEPENDENCY,
+    TEMPORARILY_UNAVAILABLE,
 }

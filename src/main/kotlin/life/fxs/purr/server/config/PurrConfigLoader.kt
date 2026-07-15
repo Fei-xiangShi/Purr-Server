@@ -1,6 +1,7 @@
 package life.fxs.purr.server.config
 
 import io.ktor.server.config.ApplicationConfig
+import java.net.URI
 
 object PurrConfigLoader {
     fun load(config: ApplicationConfig): PurrServerConfig {
@@ -108,6 +109,64 @@ object PurrConfigLoader {
                     config,
                     "purr.recording.cleanupMaxAttempts",
                     "PURR_RECORDING_CLEANUP_MAX_ATTEMPTS",
+                ),
+            ),
+            avatar = AvatarConfig(
+                bucket = string(config, "purr.avatar.bucket", "PURR_AVATAR_BUCKET"),
+                endpoint = string(config, "purr.avatar.endpoint", "PURR_AVATAR_ENDPOINT"),
+                publicEndpoint = string(config, "purr.avatar.publicEndpoint", "PURR_AVATAR_PUBLIC_ENDPOINT"),
+                accessKey = string(config, "purr.avatar.accessKey", "PURR_AVATAR_ACCESS_KEY"),
+                secretKey = string(config, "purr.avatar.secretKey", "PURR_AVATAR_SECRET_KEY"),
+                region = string(config, "purr.avatar.region", "PURR_AVATAR_REGION"),
+                forcePathStyle = boolean(config, "purr.avatar.forcePathStyle", "PURR_AVATAR_FORCE_PATH_STYLE"),
+                outputSizePixels = int(config, "purr.avatar.outputSizePixels", "PURR_AVATAR_OUTPUT_SIZE_PIXELS"),
+                maxSourceDimensionPixels = int(
+                    config,
+                    "purr.avatar.maxSourceDimensionPixels",
+                    "PURR_AVATAR_MAX_SOURCE_DIMENSION_PIXELS",
+                ),
+                maxSourcePixels = long(config, "purr.avatar.maxSourcePixels", "PURR_AVATAR_MAX_SOURCE_PIXELS"),
+                jpegQualityPercent = int(
+                    config,
+                    "purr.avatar.jpegQualityPercent",
+                    "PURR_AVATAR_JPEG_QUALITY_PERCENT",
+                ),
+                maxOutputBytes = int(config, "purr.avatar.maxOutputBytes", "PURR_AVATAR_MAX_OUTPUT_BYTES"),
+                maxConcurrentProcessing = int(
+                    config,
+                    "purr.avatar.maxConcurrentProcessing",
+                    "PURR_AVATAR_MAX_CONCURRENT_PROCESSING",
+                ),
+                cleanupEnabled = boolean(config, "purr.avatar.cleanupEnabled", "PURR_AVATAR_CLEANUP_ENABLED"),
+                cleanupIntervalSeconds = long(
+                    config,
+                    "purr.avatar.cleanupIntervalSeconds",
+                    "PURR_AVATAR_CLEANUP_INTERVAL_SECONDS",
+                ),
+                cleanupBatchSize = int(
+                    config,
+                    "purr.avatar.cleanupBatchSize",
+                    "PURR_AVATAR_CLEANUP_BATCH_SIZE",
+                ),
+                cleanupMaxAttempts = int(
+                    config,
+                    "purr.avatar.cleanupMaxAttempts",
+                    "PURR_AVATAR_CLEANUP_MAX_ATTEMPTS",
+                ),
+                cleanupRetryBaseSeconds = long(
+                    config,
+                    "purr.avatar.cleanupRetryBaseSeconds",
+                    "PURR_AVATAR_CLEANUP_RETRY_BASE_SECONDS",
+                ),
+                cleanupRetryMaxSeconds = long(
+                    config,
+                    "purr.avatar.cleanupRetryMaxSeconds",
+                    "PURR_AVATAR_CLEANUP_RETRY_MAX_SECONDS",
+                ),
+                orphanGraceSeconds = long(
+                    config,
+                    "purr.avatar.orphanGraceSeconds",
+                    "PURR_AVATAR_ORPHAN_GRACE_SECONDS",
                 ),
             ),
             realtime = RealtimeConfig(
@@ -307,6 +366,61 @@ object PurrConfigLoader {
         require(config.recording.cleanupMaxAttempts in 1..100) {
             "Recording cleanup max attempts must be between 1 and 100"
         }
+        requireHttpEndpoint(config.recording.endpoint, "Recording storage endpoint")
+        val recordingPublicEndpoint = requireHttpEndpoint(
+            config.recording.publicEndpoint,
+            "Recording public endpoint",
+        )
+        require(config.avatar.bucket.matches(Regex("[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]"))) {
+            "Avatar bucket name is invalid"
+        }
+        require(config.avatar.bucket != config.recording.bucket) {
+            "Avatar and recording storage must use separate buckets"
+        }
+        require(config.avatar.forcePathStyle || '.' !in config.avatar.bucket) {
+            "Virtual-hosted avatar buckets must not contain dots because wildcard TLS certificates will not match"
+        }
+        requireHttpEndpoint(config.avatar.endpoint, "Avatar storage endpoint")
+        val avatarPublicEndpoint = requireHttpEndpoint(config.avatar.publicEndpoint, "Avatar public endpoint")
+        require(config.avatar.accessKey.isNotBlank() && config.avatar.secretKey.isNotBlank()) {
+            "Avatar storage credentials must not be blank"
+        }
+        require(config.avatar.outputSizePixels in 128..2_048) {
+            "Avatar output size must be between 128 and 2048 pixels"
+        }
+        require(config.avatar.maxSourceDimensionPixels in config.avatar.outputSizePixels..32_768) {
+            "Avatar source dimension limit is invalid"
+        }
+        require(config.avatar.maxSourcePixels in 1_000_000L..100_000_000L) {
+            "Avatar source pixel limit must be between 1 and 100 million pixels"
+        }
+        require(config.avatar.jpegQualityPercent in 50..95) {
+            "Avatar JPEG quality must be between 50 and 95"
+        }
+        require(config.avatar.maxOutputBytes in 64 * 1024..5 * 1024 * 1024) {
+            "Avatar output byte limit must be between 64 KB and 5 MB"
+        }
+        require(config.avatar.maxConcurrentProcessing in 1..16) {
+            "Avatar processing concurrency must be between 1 and 16"
+        }
+        require(config.avatar.cleanupIntervalSeconds in 10..86_400) {
+            "Avatar cleanup interval must be between 10 and 86400 seconds"
+        }
+        require(config.avatar.cleanupBatchSize in 1..1_000) {
+            "Avatar cleanup batch size must be between 1 and 1000"
+        }
+        require(config.avatar.cleanupMaxAttempts in 1..100) {
+            "Avatar cleanup max-backoff attempt threshold must be between 1 and 100"
+        }
+        require(config.avatar.cleanupRetryBaseSeconds in 1..3_600) {
+            "Avatar cleanup retry base must be between 1 and 3600 seconds"
+        }
+        require(config.avatar.cleanupRetryMaxSeconds in config.avatar.cleanupRetryBaseSeconds..86_400) {
+            "Avatar cleanup retry max must be between the base delay and 86400 seconds"
+        }
+        require(config.avatar.orphanGraceSeconds in 300..604_800) {
+            "Avatar orphan grace must be between 5 minutes and 7 days"
+        }
         require(config.realtime.redisUri.startsWith("redis://") || config.realtime.redisUri.startsWith("rediss://")) {
             "Realtime Redis URI must use redis:// or rediss://"
         }
@@ -395,8 +509,20 @@ object PurrConfigLoader {
             require(!config.recording.enabled || config.recording.recoveryEnabled) {
                 "Enabled production recording must enable recovery"
             }
-            require(config.recording.publicEndpoint.startsWith("https://")) {
+            require(recordingPublicEndpoint.scheme.equals("https", ignoreCase = true)) {
                 "Production media public endpoint must use https://"
+            }
+            require(avatarPublicEndpoint.scheme.equals("https", ignoreCase = true)) {
+                "Production avatar public endpoint must use https://"
+            }
+            require(config.avatar.accessKey != config.recording.accessKey) {
+                "Production avatar and recording storage must use different access keys"
+            }
+            require(config.avatar.secretKey != config.recording.secretKey) {
+                "Production avatar and recording storage must use different secret keys"
+            }
+            require(config.avatar.cleanupEnabled) {
+                "Production avatar storage must enable durable cleanup"
             }
             require(!config.recording.enabled || config.recording.cleanupEnabled) {
                 "Enabled production recording must enable retention cleanup"
@@ -438,12 +564,34 @@ object PurrConfigLoader {
                     "Placeholder recording secret key is forbidden in production"
                 }
             }
+            require(config.avatar.secretKey.length >= MIN_PRODUCTION_SECRET_LENGTH) {
+                "Production avatar secret key must contain at least $MIN_PRODUCTION_SECRET_LENGTH characters"
+            }
+            require(!config.avatar.secretKey.isPlaceholderSecret()) {
+                "Placeholder avatar secret key is forbidden in production"
+            }
         }
     }
 
     private fun String.isPlaceholderSecret(): Boolean {
         val normalized = lowercase()
         return normalized.startsWith("change-me") || normalized.startsWith("dev-") || normalized == "minioadmin"
+    }
+
+    private fun requireHttpEndpoint(value: String, label: String): URI {
+        val uri = runCatching { URI(value) }
+            .getOrElse { error -> throw IllegalArgumentException("$label is not a valid URI", error) }
+        require(uri.scheme.equals("http", ignoreCase = true) || uri.scheme.equals("https", ignoreCase = true)) {
+            "$label must use HTTP or HTTPS"
+        }
+        require(!uri.host.isNullOrBlank()) { "$label must contain a host" }
+        require(uri.userInfo == null && uri.query == null && uri.fragment == null) {
+            "$label must not contain user info, a query, or a fragment"
+        }
+        require(uri.path.isNullOrEmpty() || uri.path == "/") {
+            "$label must not contain a path"
+        }
+        return uri
     }
 
     private const val EXPECTED_SEED_USER_COUNT = 2

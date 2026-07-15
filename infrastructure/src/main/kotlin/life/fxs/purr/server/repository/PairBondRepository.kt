@@ -9,30 +9,21 @@ import org.jetbrains.exposed.sql.insertIgnore
 import org.jetbrains.exposed.sql.or
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
-import org.jetbrains.exposed.sql.update
 
 class PairBondRepository : PairStore {
-    fun upsert(pairId: String, userAId: String, userBId: String, bondedAtEpochMillis: Long) {
+    fun insertIfAbsent(pairId: String, userAId: String, userBId: String, bondedAtEpochMillis: Long): Boolean =
         transaction {
-            val exists = PairBondsTable.selectAll()
-                .where { PairBondsTable.pairId eq pairId }
-                .any()
-            if (!exists) {
-                PairBondsTable.insertIgnore {
-                    it[PairBondsTable.pairId] = pairId
-                    it[PairBondsTable.userAId] = userAId
-                    it[PairBondsTable.userBId] = userBId
-                    it[PairBondsTable.bondedAtEpochMillis] = bondedAtEpochMillis
-                }
-            } else {
-                PairBondsTable.update({ PairBondsTable.pairId eq pairId }) {
-                    it[PairBondsTable.userAId] = userAId
-                    it[PairBondsTable.userBId] = userBId
-                    it[PairBondsTable.bondedAtEpochMillis] = bondedAtEpochMillis
-                }
+            if (PairBondsTable.selectAll().where { PairBondsTable.pairId eq pairId }.any()) {
+                return@transaction true
             }
+            val inserted = PairBondsTable.insertIgnore {
+                it[PairBondsTable.pairId] = pairId
+                it[PairBondsTable.userAId] = userAId
+                it[PairBondsTable.userBId] = userBId
+                it[PairBondsTable.bondedAtEpochMillis] = bondedAtEpochMillis
+            }.insertedCount == 1
+            inserted || PairBondsTable.selectAll().where { PairBondsTable.pairId eq pairId }.any()
         }
-    }
 
     override fun findByUserId(userId: String): PairRecord? = transaction {
         PairBondsTable.selectAll()

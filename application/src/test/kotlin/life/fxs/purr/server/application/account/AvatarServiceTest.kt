@@ -7,16 +7,26 @@ import kotlin.test.assertTrue
 import life.fxs.purr.server.application.ApplicationError
 import life.fxs.purr.server.application.ApplicationException
 import life.fxs.purr.server.application.port.ApplicationTransaction
-import life.fxs.purr.server.application.port.AvatarObjectStore
+import life.fxs.purr.server.application.port.AvatarCleanupQueue
+import life.fxs.purr.server.application.port.AvatarImageProcessor
+import life.fxs.purr.server.application.port.AvatarImageRejectedException
+import life.fxs.purr.server.application.port.AvatarImageProcessingUnavailableException
+import life.fxs.purr.server.application.port.AvatarObjectDeleter
+import life.fxs.purr.server.application.port.AvatarObjectUploader
+import life.fxs.purr.server.application.port.ProcessedAvatar
 import life.fxs.purr.server.application.port.StoredAvatar
 import life.fxs.purr.server.application.port.UserAccountRecord
 import life.fxs.purr.server.application.port.UserAccountStore
 
 class AvatarServiceTest {
     @Test
-    fun `validates image signature before uploading`() {
+    fun `rejects undecodable images before object upload`() {
         val store = FakeAvatarObjectStore()
-        val service = service(FakeAvatarUserAccountStore(), store)
+        val service = service(
+            accounts = FakeAvatarUserAccountStore(),
+            store = store,
+            processor = AvatarImageProcessor { _, _ -> throw AvatarImageRejectedException("malformed") },
+        )
 
         val exception = assertFailsWith<ApplicationException> {
             service.updateAvatar("user-a", "image/png", byteArrayOf(1, 2, 3))
@@ -27,85 +37,177 @@ class AvatarServiceTest {
     }
 
     @Test
-    fun `uploads avatar and updates profile`() {
-        val accounts = FakeAvatarUserAccountStore(oldAvatarUrl = "https://storage/avatars/old.png")
-        val store = FakeAvatarObjectStore()
-        val service = service(accounts, store)
+    fun `reports saturated image processing as temporarily unavailable`() {
+        val service = service(
+            accounts = FakeAvatarUserAccountStore(),
+            store = FakeAvatarObjectStore(),
+            processor = AvatarImageProcessor { _, _ ->
+                throw AvatarImageProcessingUnavailableException("capacity exhausted")
+            },
+        )
 
-        val profile = service.updateAvatar("user-a", "image/png", pngBytes())
+        val exception = assertFailsWith<ApplicationException> {
+            service.updateAvatar("user-a", "image/png", byteArrayOf(1))
+        }
 
-        assertEquals("https://storage/avatars/new.png", profile.avatarUrl)
-        assertEquals("https://storage/avatars/new.png", accounts.user.avatarUrl)
-        assertEquals(1, store.uploads.size)
-        assertEquals(listOf("https://storage/avatars/old.png"), store.deletedUrls)
+        assertEquals(ApplicationError.TEMPORARILY_UNAVAILABLE, exception.error)
     }
 
     @Test
-    fun `cleans up uploaded object when profile update fails`() {
+    fun `stores processed avatar and durably queues old object`() {
+        val accounts = FakeAvatarUserAccountStore(oldObjectKey = OLD_KEY, avatarVersion = 4)
+        val store = FakeAvatarObjectStore()
+        val cleanup = FakeCleanupQueue()
+        val service = service(accounts, store, cleanup = cleanup)
+
+        val profile = service.updateAvatar("user-a", "image/png", byteArrayOf(1, 2, 3))
+
+        assertEquals("https://storage/$NEW_KEY", profile.avatarUrl)
+        assertEquals(NEW_KEY, accounts.user.avatarObjectKey)
+        assertEquals(5, accounts.user.avatarVersion)
+        assertEquals(listOf("image/jpeg"), store.uploadContentTypes)
+        assertEquals(listOf(OLD_KEY), cleanup.keys)
+    }
+
+    @Test
+    fun `concurrent profile change queues newly uploaded object and returns conflict`() {
         val accounts = FakeAvatarUserAccountStore(updateSucceeds = false)
         val store = FakeAvatarObjectStore()
-        val service = service(accounts, store)
+        val cleanup = FakeCleanupQueue()
+        val service = service(accounts, store, cleanup = cleanup)
 
         val exception = assertFailsWith<ApplicationException> {
-            service.updateAvatar("user-a", "image/jpeg", jpegBytes())
+            service.updateAvatar("user-a", "image/jpeg", byteArrayOf(1, 2, 3))
         }
 
         assertEquals(ApplicationError.CONFLICT, exception.error)
-        assertEquals(listOf("https://storage/avatars/new.png"), store.deletedUrls)
+        assertEquals(listOf(NEW_KEY), cleanup.keys)
     }
 
     @Test
-    fun `rejects avatars above size limit`() {
-        val store = FakeAvatarObjectStore()
-        val service = service(FakeAvatarUserAccountStore(), store)
-        val bytes = ByteArray(10 * 1024 * 1024 + 1).also {
-            it[0] = 0x89.toByte()
-            it[1] = 0x50
-            it[2] = 0x4E
-            it[3] = 0x47
-            it[4] = 0x0D
-            it[5] = 0x0A
-            it[6] = 0x1A
-            it[7] = 0x0A
+    fun `database failure falls back to durable cleanup when immediate delete fails`() {
+        val store = FakeAvatarObjectStore(deleteFails = true)
+        val cleanup = FakeCleanupQueue()
+        val service = service(
+            accounts = FakeAvatarUserAccountStore(),
+            store = store,
+            cleanup = cleanup,
+            transaction = object : ApplicationTransaction {
+                override fun <T> execute(block: () -> T): T = error("database unavailable")
+            },
+        )
+
+        assertFailsWith<IllegalStateException> {
+            service.updateAvatar("user-a", "image/jpeg", byteArrayOf(1))
         }
 
+        assertEquals(listOf(NEW_KEY), store.deletedKeys)
+        assertEquals(listOf(NEW_KEY), cleanup.keys)
+    }
+
+    @Test
+    fun `indeterminate commit preserves an avatar that became the current reference`() {
+        val accounts = FakeAvatarUserAccountStore()
+        val store = FakeAvatarObjectStore()
+        val service = service(
+            accounts = accounts,
+            store = store,
+            transaction = object : ApplicationTransaction {
+                override fun <T> execute(block: () -> T): T {
+                    block()
+                    error("commit acknowledgement was lost")
+                }
+            },
+        )
+
+        val profile = service.updateAvatar("user-a", "image/jpeg", byteArrayOf(1))
+
+        assertEquals("https://storage/$NEW_KEY", profile.avatarUrl)
+        assertTrue(store.deletedKeys.isEmpty())
+    }
+
+    @Test
+    fun `rejects avatars above size limit before processing`() {
+        var processed = false
+        val service = service(
+            accounts = FakeAvatarUserAccountStore(),
+            store = FakeAvatarObjectStore(),
+            processor = AvatarImageProcessor { _, _ ->
+                processed = true
+                processedAvatar()
+            },
+        )
+
         val exception = assertFailsWith<ApplicationException> {
-            service.updateAvatar("user-a", "image/png", bytes)
+            service.updateAvatar("user-a", "image/png", ByteArray(10 * 1024 * 1024 + 1))
         }
 
         assertEquals(ApplicationError.INVALID_ARGUMENT, exception.error)
-        assertTrue(store.uploads.isEmpty())
+        assertTrue(!processed)
     }
 
-    private fun service(accounts: UserAccountStore, store: AvatarObjectStore) = AvatarService(
-        userAccountStore = accounts,
-        avatarObjectStore = store,
-        transaction = object : ApplicationTransaction {
+    private fun service(
+        accounts: UserAccountStore,
+        store: FakeAvatarObjectStore,
+        processor: AvatarImageProcessor = AvatarImageProcessor { _, _ -> processedAvatar() },
+        cleanup: AvatarCleanupQueue = FakeCleanupQueue(),
+        transaction: ApplicationTransaction = object : ApplicationTransaction {
             override fun <T> execute(block: () -> T): T = block()
         },
+    ) = AvatarService(
+        userAccountReader = accounts,
+        userProfileStore = accounts,
+        imageProcessor = processor,
+        avatarObjectUploader = store,
+        avatarObjectDeleter = store,
+        cleanupQueue = cleanup,
+        transaction = transaction,
     )
 
-    private fun pngBytes() = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+    companion object {
+        const val OLD_KEY = "avatars/user-a/00000000-0000-0000-0000-000000000001.jpg"
+        const val NEW_KEY = "avatars/user-a/00000000-0000-0000-0000-000000000002.jpg"
 
-    private fun jpegBytes() = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xD9.toByte())
+        fun processedAvatar() = ProcessedAvatar(
+            contentType = "image/jpeg",
+            bytes = byteArrayOf(4, 5, 6),
+            width = 512,
+            height = 512,
+        )
+    }
 }
 
-private class FakeAvatarObjectStore : AvatarObjectStore {
+private class FakeAvatarObjectStore(
+    private val deleteFails: Boolean = false,
+) : AvatarObjectUploader, AvatarObjectDeleter {
     val uploads = mutableListOf<ByteArray>()
-    val deletedUrls = mutableListOf<String>()
+    val uploadContentTypes = mutableListOf<String>()
+    val deletedKeys = mutableListOf<String>()
 
     override fun put(userId: String, contentType: String, bytes: ByteArray): StoredAvatar {
         uploads += bytes
-        return StoredAvatar("https://storage/avatars/new.png")
+        uploadContentTypes += contentType
+        return StoredAvatar(AvatarServiceTest.NEW_KEY)
     }
 
-    override fun deleteByUrl(url: String) {
-        deletedUrls += url
+    override fun delete(objectKey: String) {
+        deletedKeys += objectKey
+        if (deleteFails) error("storage unavailable")
+    }
+
+}
+
+private class FakeCleanupQueue : AvatarCleanupQueue {
+    val keys = mutableListOf<String>()
+
+    override fun enqueue(objectKey: String, nowEpochMillis: Long) {
+        keys += objectKey
     }
 }
 
 private class FakeAvatarUserAccountStore(
-    private val oldAvatarUrl: String? = null,
+    oldObjectKey: String? = null,
+    avatarVersion: Long = 0,
     private val updateSucceeds: Boolean = true,
 ) : UserAccountStore {
     var user = UserAccountRecord(
@@ -113,20 +215,32 @@ private class FakeAvatarUserAccountStore(
         username = "user-a",
         passwordHash = "hash",
         displayName = "User A",
-        avatarUrl = oldAvatarUrl,
+        avatarUrl = oldObjectKey?.let { "https://storage/$it" },
+        avatarObjectKey = oldObjectKey,
+        avatarVersion = avatarVersion,
     )
 
     override fun findByUsername(username: String): UserAccountRecord? = user.takeIf { it.username == username }
 
     override fun findById(userId: String): UserAccountRecord? = user.takeIf { it.userId == userId }
 
-    override fun replacePasswordHash(userId: String, expectedPasswordHash: String, newPasswordHash: String): Boolean = false
+    override fun replacePasswordHash(userId: String, expectedPasswordHash: String, newPasswordHash: String) = false
 
-    override fun updateAvatarUrl(userId: String, avatarUrl: String): Boolean {
-        if (!updateSucceeds || user.userId != userId) return false
-        user = user.copy(avatarUrl = avatarUrl)
+    override fun compareAndSetAvatar(
+        userId: String,
+        expectedVersion: Long,
+        objectKey: String,
+    ): Boolean {
+        if (!updateSucceeds || user.userId != userId || user.avatarVersion != expectedVersion) return false
+        user = user.copy(
+            avatarUrl = "https://storage/$objectKey",
+            avatarObjectKey = objectKey,
+            avatarVersion = expectedVersion + 1,
+        )
         return true
     }
 
-    override fun updateDisplayName(userId: String, displayName: String): Boolean = false
+    override fun updateDisplayName(userId: String, displayName: String) = false
+
+    override fun findReferencedObjectKeys(candidates: Set<String>) = candidates.intersect(setOfNotNull(user.avatarObjectKey))
 }

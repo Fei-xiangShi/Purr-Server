@@ -6,10 +6,12 @@ import life.fxs.purr.server.application.port.ApplicationTransaction
 import life.fxs.purr.server.application.port.AuthSessionStore
 import life.fxs.purr.server.application.port.PasswordHasher
 import life.fxs.purr.server.application.port.PasswordVerifier
-import life.fxs.purr.server.application.port.UserAccountStore
+import life.fxs.purr.server.application.port.UserAccountReader
+import life.fxs.purr.server.application.port.UserCredentialStore
 
 class PasswordChangeService(
-    private val userAccountStore: UserAccountStore,
+    private val userAccountReader: UserAccountReader,
+    private val userCredentialStore: UserCredentialStore,
     private val authSessionStore: AuthSessionStore,
     private val passwordVerifier: PasswordVerifier,
     private val passwordHasher: PasswordHasher,
@@ -22,7 +24,7 @@ class PasswordChangeService(
         }
         passwordPolicy.validate(newPassword)
 
-        val user = userAccountStore.findById(userId)
+        val user = userAccountReader.findById(userId)
             ?: throw ApplicationException(ApplicationError.UNAUTHENTICATED, "Unknown user")
         if (!passwordVerifier.matches(currentPassword, user.passwordHash)) {
             throw ApplicationException(ApplicationError.FORBIDDEN, "Current password is incorrect")
@@ -36,7 +38,7 @@ class PasswordChangeService(
 
         val newPasswordHash = passwordHasher.hash(newPassword)
         transaction.execute {
-            val replaced = userAccountStore.replacePasswordHash(
+            val replaced = userCredentialStore.replacePasswordHash(
                 userId = userId,
                 expectedPasswordHash = user.passwordHash,
                 newPasswordHash = newPasswordHash,

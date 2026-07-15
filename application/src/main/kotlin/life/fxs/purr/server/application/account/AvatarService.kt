@@ -1,61 +1,143 @@
 package life.fxs.purr.server.application.account
 
+import java.time.Instant
 import life.fxs.purr.server.application.ApplicationError
 import life.fxs.purr.server.application.ApplicationException
 import life.fxs.purr.server.application.model.UserProfile
 import life.fxs.purr.server.application.port.ApplicationTransaction
-import life.fxs.purr.server.application.port.AvatarObjectStore
-import life.fxs.purr.server.application.port.UserAccountStore
+import life.fxs.purr.server.application.port.AvatarCleanupQueue
+import life.fxs.purr.server.application.port.AvatarImageProcessor
+import life.fxs.purr.server.application.port.AvatarImageRejectedException
+import life.fxs.purr.server.application.port.AvatarImageProcessingUnavailableException
+import life.fxs.purr.server.application.port.AvatarObjectDeleter
+import life.fxs.purr.server.application.port.AvatarObjectUploader
+import life.fxs.purr.server.application.port.AvatarUploadTelemetry
+import life.fxs.purr.server.application.port.AvatarUploadOutcome
+import life.fxs.purr.server.application.port.AvatarUploadLimits
+import life.fxs.purr.server.application.port.NoOpAvatarTelemetry
+import life.fxs.purr.server.application.port.UserAccountReader
+import life.fxs.purr.server.application.port.UserProfileStore
 
 class AvatarService(
-    private val userAccountStore: UserAccountStore,
-    private val avatarObjectStore: AvatarObjectStore,
+    private val userAccountReader: UserAccountReader,
+    private val userProfileStore: UserProfileStore,
+    private val imageProcessor: AvatarImageProcessor,
+    private val avatarObjectUploader: AvatarObjectUploader,
+    private val avatarObjectDeleter: AvatarObjectDeleter,
+    private val cleanupQueue: AvatarCleanupQueue,
     private val transaction: ApplicationTransaction,
+    private val telemetry: AvatarUploadTelemetry = NoOpAvatarTelemetry,
+    private val nowProvider: () -> Instant = Instant::now,
+    private val nanoTimeProvider: () -> Long = System::nanoTime,
 ) {
     fun updateAvatar(userId: String, contentType: String, bytes: ByteArray): UserProfile {
-        validate(contentType, bytes)
-        val user = userAccountStore.findById(userId)
-            ?: throw ApplicationException(ApplicationError.UNAUTHENTICATED, "Unknown user")
-        val stored = avatarObjectStore.put(userId, contentType, bytes)
+        val startedAt = nanoTimeProvider()
+        var outputBytes = 0
+        var outcome = AvatarUploadOutcome.FAILED
         try {
-            transaction.execute {
-                if (!userAccountStore.updateAvatarUrl(userId, stored.url)) {
-                    throw ApplicationException(ApplicationError.CONFLICT, "User profile changed; retry the upload")
+            validateSize(bytes)
+            val processed = try {
+                imageProcessor.process(contentType, bytes)
+            } catch (error: AvatarImageRejectedException) {
+                throw ApplicationException(
+                    ApplicationError.INVALID_ARGUMENT,
+                    error.message ?: "Avatar image is invalid",
+                )
+            } catch (error: AvatarImageProcessingUnavailableException) {
+                throw ApplicationException(
+                    ApplicationError.TEMPORARILY_UNAVAILABLE,
+                    error.message ?: "Avatar processing is temporarily unavailable",
+                )
+            }
+            outputBytes = processed.bytes.size
+            val user = userAccountReader.findById(userId)
+                ?: throw ApplicationException(ApplicationError.UNAUTHENTICATED, "Unknown user")
+            val stored = avatarObjectUploader.put(userId, processed.contentType, processed.bytes)
+            var updated = false
+            try {
+                transaction.execute {
+                    updated = userProfileStore.compareAndSetAvatar(
+                        userId = userId,
+                        expectedVersion = user.avatarVersion,
+                        objectKey = stored.objectKey,
+                    )
+                    val cleanupKey = if (updated) user.avatarObjectKey else stored.objectKey
+                    cleanupKey?.let { cleanupQueue.enqueue(it, nowProvider().toEpochMilli()) }
+                }
+            } catch (error: Exception) {
+                when (isCurrentAvatar(userId, stored.objectKey)) {
+                    true -> updated = true
+                    false -> {
+                        updated = false
+                        cleanupUnreferencedObject(stored.objectKey)
+                    }
+                    null -> {
+                        updated = false // Reconciliation safely resolves an indeterminate commit later.
+                    }
+                }
+                if (!updated) throw error
+            }
+            if (!updated) {
+                outcome = AvatarUploadOutcome.CONFLICT
+                throw ApplicationException(ApplicationError.CONFLICT, "User profile changed; retry the upload")
+            }
+            outcome = AvatarUploadOutcome.SUCCEEDED
+            return currentProfile(userId)
+        } catch (error: ApplicationException) {
+            if (outcome != AvatarUploadOutcome.CONFLICT) {
+                outcome = if (error.error == ApplicationError.INVALID_ARGUMENT) {
+                    AvatarUploadOutcome.REJECTED
+                } else {
+                    AvatarUploadOutcome.FAILED
                 }
             }
-        } catch (throwable: Throwable) {
-            runCatching { avatarObjectStore.deleteByUrl(stored.url) }
-            throw throwable
+            throw error
+        } finally {
+            try {
+                telemetry.recordUpload(
+                    outcome = outcome,
+                    inputBytes = bytes.size,
+                    outputBytes = outputBytes,
+                    durationNanos = nanoTimeProvider() - startedAt,
+                )
+            } catch (_: Exception) {
+                // Telemetry must never change upload semantics.
+            }
         }
-        user.avatarUrl?.let { oldUrl -> runCatching { avatarObjectStore.deleteByUrl(oldUrl) } }
-        return UserProfile(user.userId, user.displayName, stored.url)
     }
 
-    private fun validate(contentType: String, bytes: ByteArray) {
-        if (bytes.isEmpty() || bytes.size > MAX_AVATAR_BYTES) {
+    private fun validateSize(bytes: ByteArray) {
+        if (bytes.isEmpty() || bytes.size > AvatarUploadLimits.MAX_INPUT_BYTES) {
             throw ApplicationException(ApplicationError.INVALID_ARGUMENT, "Avatar must be between 1 byte and 10 MB")
         }
-        val normalizedType = contentType.lowercase()
-        val validSignature = when (normalizedType) {
-            JPEG -> bytes.startsWith(byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()))
-            PNG -> bytes.startsWith(byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A))
-            WEBP -> bytes.size >= 12 &&
-                bytes.copyOfRange(0, 4).contentEquals("RIFF".toByteArray()) &&
-                bytes.copyOfRange(8, 12).contentEquals("WEBP".toByteArray())
-            else -> false
+    }
+
+    private fun isCurrentAvatar(userId: String, objectKey: String): Boolean? = try {
+        userAccountReader.findById(userId)?.avatarObjectKey == objectKey
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun currentProfile(userId: String): UserProfile {
+        val current = checkNotNull(userAccountReader.findById(userId)) {
+            "Avatar owner disappeared after a successful update"
         }
-        if (!validSignature) {
-            throw ApplicationException(ApplicationError.INVALID_ARGUMENT, "Avatar must be a valid JPEG, PNG, or WebP image")
+        val avatarUrl = checkNotNull(current.avatarUrl) {
+            "Avatar URL could not be resolved after a successful update"
+        }
+        return UserProfile(current.userId, current.displayName, avatarUrl)
+    }
+
+    private fun cleanupUnreferencedObject(objectKey: String) {
+        try {
+            avatarObjectDeleter.delete(objectKey)
+        } catch (_: Exception) {
+            try {
+                cleanupQueue.enqueue(objectKey, nowProvider().toEpochMilli())
+            } catch (_: Exception) {
+                // The periodic object/reference reconciliation is the final recovery path.
+            }
         }
     }
 
-    private companion object {
-        const val MAX_AVATAR_BYTES = 10 * 1024 * 1024
-        const val JPEG = "image/jpeg"
-        const val PNG = "image/png"
-        const val WEBP = "image/webp"
-    }
 }
-
-private fun ByteArray.startsWith(prefix: ByteArray): Boolean =
-    size >= prefix.size && copyOfRange(0, prefix.size).contentEquals(prefix)

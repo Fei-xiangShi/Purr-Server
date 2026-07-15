@@ -6,19 +6,35 @@ data class UserAccountRecord(
     val passwordHash: String,
     val displayName: String,
     val avatarUrl: String?,
+    val avatarObjectKey: String? = null,
+    val avatarVersion: Long = 0,
 )
 
-interface UserAccountStore {
+interface UserAccountReader {
     fun findByUsername(username: String): UserAccountRecord?
 
     fun findById(userId: String): UserAccountRecord?
-
-    fun replacePasswordHash(userId: String, expectedPasswordHash: String, newPasswordHash: String): Boolean
-
-    fun updateAvatarUrl(userId: String, avatarUrl: String): Boolean
-
-    fun updateDisplayName(userId: String, displayName: String): Boolean
 }
+
+interface UserCredentialStore {
+    fun replacePasswordHash(userId: String, expectedPasswordHash: String, newPasswordHash: String): Boolean
+}
+
+interface UserProfileStore {
+    fun updateDisplayName(userId: String, displayName: String): Boolean
+
+    fun compareAndSetAvatar(
+        userId: String,
+        expectedVersion: Long,
+        objectKey: String,
+    ): Boolean
+}
+
+fun interface AvatarReferenceReader {
+    fun findReferencedObjectKeys(candidates: Set<String>): Set<String>
+}
+
+interface UserAccountStore : UserAccountReader, UserCredentialStore, UserProfileStore, AvatarReferenceReader
 
 data class AuthSessionRecord(
     val sessionId: String,

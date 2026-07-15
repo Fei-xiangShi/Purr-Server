@@ -42,15 +42,23 @@ class CallSessionService(
                 throw ApplicationException(ApplicationError.INVALID_ARGUMENT, "Explicit recording consent is required")
             }
 
-            if (command.resumeCallId != null) {
-                throw ApplicationException(
-                    ApplicationError.INVALID_ARGUMENT,
-                    "Call reconnection is not supported; create a new call session",
-                )
-            }
             val resolvedCall = callSessionStore.findOrCreateActive(command.pairId) {
+                if (command.expectedCallId != null) {
+                    throw ApplicationException(
+                        ApplicationError.CONFLICT,
+                        "Incoming call is no longer active: ${command.expectedCallId}",
+                    )
+                }
                 newCall(command.pairId, userId)
             }.also { resolution ->
+                command.expectedCallId?.let { expectedCallId ->
+                    if (resolution.call.callId != expectedCallId || resolution.call.createdByUserId == userId) {
+                        throw ApplicationException(
+                            ApplicationError.CONFLICT,
+                            "Incoming call is no longer active: $expectedCallId",
+                        )
+                    }
+                }
                 if (resolution.created) {
                     realtimeOutbox.enqueue(
                         recipientUserId = pairService.requirePartnerUserId(userId),
@@ -58,10 +66,10 @@ class CallSessionService(
                         occurredAtEpochMillis = resolution.call.startedAtEpochMillis,
                     )
                 }
-            }.call
+            }
             if (recordingEnabled) {
                 recordingConsentStore.record(
-                    callId = resolvedCall.callId,
+                    callId = resolvedCall.call.callId,
                     userId = userId,
                     policyVersion = consentPolicyVersion,
                     consentedAtEpochMillis = nowProvider().toEpochMilli(),
@@ -69,7 +77,7 @@ class CallSessionService(
             }
             resolvedCall
         }
-        return call.toSessionResult(userId)
+        return call.call.toSessionResult(userId, createdByRequest = call.created)
     }
 
     fun getCall(userId: String, callId: String): CallStatusResult {
@@ -102,7 +110,7 @@ class CallSessionService(
         )
     }
 
-    private fun CallRecord.toSessionResult(userId: String): CallSessionResult {
+    private fun CallRecord.toSessionResult(userId: String, createdByRequest: Boolean): CallSessionResult {
         val participantIdentity = "$userId-$callId"
         return CallSessionResult(
             callId = callId,
@@ -111,6 +119,7 @@ class CallSessionService(
             participantIdentity = participantIdentity,
             token = mediaTokenIssuer.issueAccessToken(roomName, participantIdentity),
             wsUrl = mediaServerWsUrl,
+            createdByRequest = createdByRequest,
         )
     }
 

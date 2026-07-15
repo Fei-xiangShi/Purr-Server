@@ -36,7 +36,8 @@ class ProfileServiceTest {
     }
 
     private fun service(accounts: UserAccountStore) = ProfileService(
-        userAccountStore = accounts,
+        userAccountReader = accounts,
+        userProfileStore = accounts,
         transaction = object : ApplicationTransaction {
             override fun <T> execute(block: () -> T): T = block()
         },
@@ -58,11 +59,17 @@ private class ProfileUserAccountStore : UserAccountStore {
 
     override fun replacePasswordHash(userId: String, expectedPasswordHash: String, newPasswordHash: String): Boolean = false
 
-    override fun updateAvatarUrl(userId: String, avatarUrl: String): Boolean = false
+    override fun compareAndSetAvatar(
+        userId: String,
+        expectedVersion: Long,
+        objectKey: String,
+    ): Boolean = false
 
     override fun updateDisplayName(userId: String, displayName: String): Boolean {
         if (user.userId != userId) return false
         user = user.copy(displayName = displayName)
         return true
     }
+
+    override fun findReferencedObjectKeys(candidates: Set<String>) = emptySet<String>()
 }

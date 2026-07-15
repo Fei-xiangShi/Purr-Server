@@ -12,7 +12,7 @@ class PushDeviceRepositoryTest {
     @Test
     fun `registration is idempotent and session deletion removes the device`() = withDatabase {
         val users = UserRepository()
-        users.upsert("user-a", "user-a", "password", "User A", null)
+        users.insertIfAbsent("user-a", "user-a", "password", "User A", null)
         val sessions = AuthSessionRepository()
         val session = sessions.create("user-a", "refresh-token", 1L, 10_000L)
         val repository = PushDeviceRepository()
@@ -32,7 +32,7 @@ class PushDeviceRepositoryTest {
     @Test
     fun `unregistered token is disabled without deleting installation history`() = withDatabase {
         val users = UserRepository()
-        users.upsert("user-a", "user-a", "password", "User A", null)
+        users.insertIfAbsent("user-a", "user-a", "password", "User A", null)
         val session = AuthSessionRepository().create("user-a", "refresh-token", 1L, 10_000L)
         val repository = PushDeviceRepository()
         repository.upsert(device(session.sessionId, TOKEN_A, 2L))

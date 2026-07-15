@@ -94,9 +94,9 @@ class RecordingRetentionServiceTest {
         val pairs = PairBondRepository()
         val calls = CallSessionRepository()
         val recordings = CallRecordingRepository()
-        users.upsert("user-a", "user-a", "pass-a", "A", null)
-        users.upsert("user-b", "user-b", "pass-b", "B", null)
-        pairs.upsert("pair-1", "user-a", "user-b", 1L)
+        users.insertIfAbsent("user-a", "user-a", "pass-a", "A", null)
+        users.insertIfAbsent("user-b", "user-b", "pass-b", "B", null)
+        pairs.insertIfAbsent("pair-1", "user-a", "user-b", 1L)
         calls.upsert(
             CallRecord(
                 callId = "call-1",

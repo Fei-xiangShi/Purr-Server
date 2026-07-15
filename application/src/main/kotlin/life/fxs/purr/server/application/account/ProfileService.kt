@@ -4,10 +4,12 @@ import life.fxs.purr.server.application.ApplicationError
 import life.fxs.purr.server.application.ApplicationException
 import life.fxs.purr.server.application.model.UserProfile
 import life.fxs.purr.server.application.port.ApplicationTransaction
-import life.fxs.purr.server.application.port.UserAccountStore
+import life.fxs.purr.server.application.port.UserAccountReader
+import life.fxs.purr.server.application.port.UserProfileStore
 
 class ProfileService(
-    private val userAccountStore: UserAccountStore,
+    private val userAccountReader: UserAccountReader,
+    private val userProfileStore: UserProfileStore,
     private val transaction: ApplicationTransaction,
 ) {
     fun updateDisplayName(userId: String, requestedDisplayName: String): UserProfile {
@@ -19,9 +21,9 @@ class ProfileService(
             )
         }
         val user = transaction.execute {
-            val current = userAccountStore.findById(userId)
+            val current = userAccountReader.findById(userId)
                 ?: throw ApplicationException(ApplicationError.UNAUTHENTICATED, "Unknown user")
-            if (!userAccountStore.updateDisplayName(userId, displayName)) {
+            if (!userProfileStore.updateDisplayName(userId, displayName)) {
                 throw ApplicationException(ApplicationError.CONFLICT, "User profile changed; retry the update")
             }
             current

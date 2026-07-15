@@ -12,11 +12,11 @@ import life.fxs.purr.server.application.port.AuthSessionRecord
 import life.fxs.purr.server.application.port.AuthSessionStore
 import life.fxs.purr.server.application.port.PasswordVerifier
 import life.fxs.purr.server.application.port.UserAccountRecord
-import life.fxs.purr.server.application.port.UserAccountStore
+import life.fxs.purr.server.application.port.UserAccountReader
 
 class AuthService(
     private val refreshTokenTtlSeconds: Long,
-    private val userAccountStore: UserAccountStore,
+    private val userAccountReader: UserAccountReader,
     private val authSessionStore: AuthSessionStore,
     private val accessTokenIssuer: AccessTokenIssuer,
     private val passwordVerifier: PasswordVerifier,
@@ -24,7 +24,7 @@ class AuthService(
     private val secureRandom: SecureRandom = SecureRandom(),
 ) {
     fun login(username: String, password: String): AuthSessionResult {
-        val user = userAccountStore.findByUsername(username)
+        val user = userAccountReader.findByUsername(username)
             ?: throw ApplicationException(ApplicationError.UNAUTHENTICATED, "Invalid credentials")
         if (!passwordVerifier.matches(password, user.passwordHash)) {
             throw ApplicationException(ApplicationError.UNAUTHENTICATED, "Invalid credentials")
@@ -41,7 +41,7 @@ class AuthService(
             createdAtEpochMillis = now.toEpochMilli(),
             expiresAtEpochMillis = now.plusSeconds(refreshTokenTtlSeconds).toEpochMilli(),
         ) ?: throw ApplicationException(ApplicationError.UNAUTHENTICATED, "Invalid or expired refresh token")
-        val user = userAccountStore.findById(session.userId)
+        val user = userAccountReader.findById(session.userId)
             ?: throw ApplicationException(ApplicationError.UNAUTHENTICATED, "Unknown user")
         return createSessionResult(user, session, replacementToken)
     }

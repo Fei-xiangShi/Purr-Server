@@ -22,8 +22,11 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.slf4j.api)
     implementation(libs.google.auth.oauth2.http)
+    implementation(libs.metadata.extractor)
 
     runtimeOnly(libs.postgresql)
     runtimeOnly(libs.h2)
     testImplementation(kotlin("test"))
+    testImplementation(libs.embedded.postgres)
+    testImplementation(enforcedPlatform(libs.embedded.postgres.binaries.bom))
 }

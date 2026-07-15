@@ -10,4 +10,5 @@ data class SessionResponseDto(
     val participantIdentity: String,
     val token: String,
     val wsUrl: String,
+    val createdByRequest: Boolean,
 )

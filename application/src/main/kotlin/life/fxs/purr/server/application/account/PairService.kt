@@ -8,16 +8,16 @@ import life.fxs.purr.server.application.model.PartnerProfile
 import life.fxs.purr.server.application.model.UserProfile
 import life.fxs.purr.server.application.port.PairStore
 import life.fxs.purr.server.application.port.PresenceStore
-import life.fxs.purr.server.application.port.UserAccountStore
+import life.fxs.purr.server.application.port.UserAccountReader
 
 class PairService(
     private val pairStore: PairStore,
-    private val userAccountStore: UserAccountStore,
+    private val userAccountReader: UserAccountReader,
     private val presenceStore: PresenceStore? = null,
     private val nowProvider: () -> Instant = Instant::now,
 ) {
     fun requireSelfProfile(userId: String): UserProfile {
-        val user = userAccountStore.findById(userId)
+        val user = userAccountReader.findById(userId)
             ?: throw ApplicationException(ApplicationError.UNAUTHENTICATED, "Unknown userId: $userId")
         return UserProfile(user.userId, user.displayName, user.avatarUrl)
     }
@@ -27,7 +27,7 @@ class PairService(
             ?: throw ApplicationException(ApplicationError.FORBIDDEN, "User $userId is not paired")
         val self = requireSelfProfile(userId)
         val partnerId = if (pair.userAId == userId) pair.userBId else pair.userAId
-        val partner = userAccountStore.findById(partnerId)
+        val partner = userAccountReader.findById(partnerId)
             ?: throw ApplicationException(ApplicationError.NOT_FOUND, "Partner not found: $partnerId")
         val partnerOnline = presenceStore?.isOnline(partnerId, nowProvider().toEpochMilli()) == true
         return PairDetails(

@@ -60,6 +60,27 @@ purr:
     cleanupIntervalSeconds: 3600
     cleanupBatchSize: 100
     cleanupMaxAttempts: 10
+  avatar:
+    bucket: purr-avatars
+    endpoint: "http://localhost:9000"
+    publicEndpoint: "http://localhost:9000"
+    accessKey: purr-avatar-dev
+    secretKey: purr-avatar-dev-secret
+    region: us-east-1
+    forcePathStyle: true
+    outputSizePixels: 512
+    maxSourceDimensionPixels: 8192
+    maxSourcePixels: 16000000
+    jpegQualityPercent: 88
+    maxOutputBytes: 1048576
+    maxConcurrentProcessing: 2
+    cleanupEnabled: false
+    cleanupIntervalSeconds: 60
+    cleanupBatchSize: 100
+    cleanupMaxAttempts: 20
+    cleanupRetryBaseSeconds: 5
+    cleanupRetryMaxSeconds: 3600
+    orphanGraceSeconds: 3600
   realtime:
     provider: local
     redisUri: "redis://localhost:6379"

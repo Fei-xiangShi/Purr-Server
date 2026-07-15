@@ -52,10 +52,12 @@ fun Application.configureRequestValidation() {
             when {
                 request.pairId.isBlank() || request.pairId.length > 64 ->
                     ValidationResult.Invalid("pairId must contain 1 to 64 characters")
-                request.resumeCallId != null && request.resumeCallId.length !in 1..128 ->
-                    ValidationResult.Invalid("resumeCallId must contain 1 to 128 characters")
+                request.expectedCallId != null && !request.expectedCallId.matches(CALL_ID_PATTERN) ->
+                    ValidationResult.Invalid("expectedCallId must be a valid call identifier")
                 else -> ValidationResult.Valid
             }
         }
     }
 }
+
+private val CALL_ID_PATTERN = Regex("[A-Za-z0-9._-]{1,128}")

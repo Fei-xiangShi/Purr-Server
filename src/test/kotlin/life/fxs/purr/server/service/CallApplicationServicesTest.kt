@@ -50,9 +50,9 @@ class CallApplicationServicesTest {
         try {
             val userRepository = UserRepository()
             val pairBondRepository = PairBondRepository()
-            userRepository.upsert("user-a", "user-a", "pass-a", "User A", null)
-            userRepository.upsert("user-b", "user-b", "pass-b", "User B", null)
-            pairBondRepository.upsert("pair-demo", "user-a", "user-b", 1L)
+            userRepository.insertIfAbsent("user-a", "user-a", "pass-a", "User A", null)
+            userRepository.insertIfAbsent("user-b", "user-b", "pass-b", "User B", null)
+            pairBondRepository.insertIfAbsent("pair-demo", "user-a", "user-b", 1L)
 
             val service = createTestServices(
                 pairService = PairService(pairBondRepository, userRepository),
@@ -78,7 +78,7 @@ class CallApplicationServicesTest {
                     check(start.await(5, TimeUnit.SECONDS))
                     service.createSession(
                         userId,
-                        CreateCallSessionCommand("pair-demo", resumeCallId = null, recordingConsent = false),
+                        CreateCallSessionCommand("pair-demo", expectedCallId = null, recordingConsent = false),
                     )
                 }
             }
@@ -109,9 +109,9 @@ class CallApplicationServicesTest {
         try {
             val userRepository = UserRepository()
             val pairBondRepository = PairBondRepository()
-            userRepository.upsert("user-a", "user-a", "pass-a", "User A", null)
-            userRepository.upsert("user-b", "user-b", "pass-b", "User B", null)
-            pairBondRepository.upsert("pair-demo", "user-a", "user-b", 1L)
+            userRepository.insertIfAbsent("user-a", "user-a", "pass-a", "User A", null)
+            userRepository.insertIfAbsent("user-b", "user-b", "pass-b", "User B", null)
+            pairBondRepository.insertIfAbsent("pair-demo", "user-a", "user-b", 1L)
 
             val repository = CallSessionRepository()
             val now = Instant.parse("2026-03-19T14:00:00Z")
@@ -173,7 +173,7 @@ class CallApplicationServicesTest {
                 userId = "user-a",
                 command = CreateCallSessionCommand(
                     pairId = "pair-demo",
-                    resumeCallId = null,
+                    expectedCallId = null,
                     recordingConsent = false,
                 ),
             )
@@ -199,9 +199,9 @@ class CallApplicationServicesTest {
         try {
             val userRepository = UserRepository()
             val pairBondRepository = PairBondRepository()
-            userRepository.upsert("user-a", "user-a", "pass-a", "User A", null)
-            userRepository.upsert("user-b", "user-b", "pass-b", "User B", null)
-            pairBondRepository.upsert("pair-demo", "user-a", "user-b", 1L)
+            userRepository.insertIfAbsent("user-a", "user-a", "pass-a", "User A", null)
+            userRepository.insertIfAbsent("user-b", "user-b", "pass-b", "User B", null)
+            pairBondRepository.insertIfAbsent("pair-demo", "user-a", "user-b", 1L)
 
             val callRepository = CallSessionRepository()
             val consentRepository = CallRecordingConsentRepository()

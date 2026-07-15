@@ -213,9 +213,9 @@ class RecordingCommandDispatcherTest {
 
     private fun seedPair() {
         val users = UserRepository()
-        users.upsert("user-a", "user-a", "pass-a", "A", null)
-        users.upsert("user-b", "user-b", "pass-b", "B", null)
-        PairBondRepository().upsert(PAIR_ID, "user-a", "user-b", bondedAtEpochMillis = 1L)
+        users.insertIfAbsent("user-a", "user-a", "pass-a", "A", null)
+        users.insertIfAbsent("user-b", "user-b", "pass-b", "B", null)
+        PairBondRepository().insertIfAbsent(PAIR_ID, "user-a", "user-b", bondedAtEpochMillis = 1L)
     }
 
     private fun outboxConfig() = OutboxConfig(

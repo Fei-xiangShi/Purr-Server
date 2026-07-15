@@ -59,7 +59,8 @@ fun Route.registerPurrRoutes(
         if (
             ready &&
             dependencies.durableEventSink.isReady() &&
-            dependencies.authRateLimiter.isReady()
+            dependencies.authRateLimiter.isReady() &&
+            dependencies.avatarStorageReadiness()
         ) {
             call.respond(HttpStatusCode.OK, HealthResponse(status = "ok"))
         } else {
@@ -98,117 +99,14 @@ fun Route.registerPurrRoutes(
     }
 
     authenticate("auth-jwt") {
-        rateLimit(AuthRateLimit) {
-            put("/me/profile") {
-                val request = call.receive<UpdateProfileRequestDto>()
-                val user = call.requireAuthenticatedUser()
-                call.respond(
-                    onBlockingIo {
-                        dependencies.profileService.updateDisplayName(user.userId, request.displayName).toDto()
-                    },
-                )
-            }
-        }
-
-        rateLimit(AuthRateLimit) {
-            put("/me/avatar") {
-                var fileCount = 0
-                var contentType: String? = null
-                var bytes: ByteArray? = null
-                call.receiveMultipart().forEachPart { part ->
-                    try {
-                        if (part is io.ktor.http.content.PartData.FileItem) {
-                            if (part.name != "avatar") {
-                                throw ApiException(HttpStatusCode.BadRequest, "Avatar file field is required")
-                            }
-                            fileCount++
-                            if (fileCount > 1) {
-                                throw ApiException(HttpStatusCode.BadRequest, "Only one avatar file is allowed")
-                            }
-                            contentType = part.contentType?.withoutParameters()?.toString()
-                            bytes = part.provider().use { input ->
-                                onBlockingIo { input.readAtMost(MAX_AVATAR_BYTES + 1) }
-                            }
-                        }
-                    } finally {
-                        part.dispose()
-                    }
-                }
-                val user = call.requireAuthenticatedUser()
-                val uploadBytes = bytes ?: throw ApiException(HttpStatusCode.BadRequest, "Avatar file is required")
-                if (uploadBytes.size > MAX_AVATAR_BYTES) {
-                    throw ApiException(HttpStatusCode.BadRequest, "Avatar must not exceed 10 MB")
-                }
-                call.respond(
-                    onBlockingIo {
-                        dependencies.avatarService.updateAvatar(
-                            userId = user.userId,
-                            contentType = contentType.orEmpty(),
-                            bytes = uploadBytes,
-                        ).toDto()
-                    },
-                )
-            }
-        }
-
-        rateLimit(AuthRateLimit) {
-            put("/me/password") {
-                val request = call.receive<ChangePasswordRequestDto>()
-                val user = call.requireAuthenticatedUser()
-                onBlockingIo {
-                    dependencies.passwordChangeService.changePassword(
-                        userId = user.userId,
-                        currentPassword = request.currentPassword,
-                        newPassword = request.newPassword,
-                    )
-                }
-                call.respond(HttpStatusCode.NoContent)
-            }
-        }
-
-        get("/me") {
-            val user = call.requireAuthenticatedUser()
-            call.respond(onBlockingIo { dependencies.pairService.requireSelfProfile(user.userId).toDto() })
-        }
-
-        get("/pair") {
-            val user = call.requireAuthenticatedUser()
-            call.respond(onBlockingIo { dependencies.pairService.requirePairBond(user.userId).toDto() })
-        }
-
-        put("/devices/push/{installationId}") {
-            val installationId = call.parameters["installationId"]
-                ?: throw ApiException(HttpStatusCode.BadRequest, "Missing installationId")
-            val request = call.receive<PushDeviceRegistrationDto>()
-            val provider = runCatching { PushProvider.valueOf(request.provider.uppercase()) }
-                .getOrElse { throw ApiException(HttpStatusCode.BadRequest, "Unsupported push provider") }
-            val user = call.requireAuthenticatedUser()
-            onBlockingIo {
-                dependencies.pushDeviceService.register(
-                    userId = user.userId,
-                    sessionId = user.sessionId,
-                    installationId = installationId,
-                    provider = provider,
-                    token = request.token,
-                )
-            }
-            call.respond(HttpStatusCode.NoContent)
-        }
-
-        delete("/devices/push/{installationId}") {
-            val installationId = call.parameters["installationId"]
-                ?: throw ApiException(HttpStatusCode.BadRequest, "Missing installationId")
-            val user = call.requireAuthenticatedUser()
-            onBlockingIo { dependencies.pushDeviceService.unregister(user.userId, installationId) }
-            call.respond(HttpStatusCode.NoContent)
-        }
+        registerAccountRoutes(dependencies)
 
         post("/calls/session") {
             val request = call.receive<SessionRequestDto>()
             val user = call.requireAuthenticatedUser()
             val command = CreateCallSessionCommand(
                 pairId = request.pairId,
-                resumeCallId = request.resumeCallId,
+                expectedCallId = request.expectedCallId,
                 recordingConsent = request.recordingConsent,
             )
             call.respond(
@@ -366,7 +264,7 @@ fun Route.registerPurrRoutes(
     }
 }
 
-private fun io.ktor.server.application.ApplicationCall.requireAuthenticatedUser(): AuthenticatedUser {
+internal fun io.ktor.server.application.ApplicationCall.requireAuthenticatedUser(): AuthenticatedUser {
     return principal<AuthenticatedUser>() ?: throw ApiException(HttpStatusCode.Unauthorized, "Missing authenticated user")
 }
 
@@ -397,7 +295,6 @@ private data class HealthResponse(
 )
 
 private const val DATABASE_VALIDATION_TIMEOUT_SECONDS = 2
-private const val MAX_AVATAR_BYTES = 10 * 1024 * 1024
 private const val DEFAULT_CALL_HISTORY_PAGE_SIZE = 20
 private const val MAX_CALL_HISTORY_PAGE_SIZE = 50
 private val PrometheusContentType = ContentType.parse("text/plain; version=0.0.4; charset=utf-8")

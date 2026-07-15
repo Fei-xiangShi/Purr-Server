@@ -62,6 +62,7 @@ internal fun CallSessionResult.toDto() = SessionResponseDto(
     participantIdentity = participantIdentity,
     token = token,
     wsUrl = wsUrl,
+    createdByRequest = createdByRequest,
 )
 
 internal fun CallStatusResult.toDto() = CallStatusDto(

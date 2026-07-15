@@ -6,46 +6,34 @@ import life.fxs.purr.server.application.port.UserAccountStore
 import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.and
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
 import org.jetbrains.exposed.sql.insertIgnore
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
 import org.mindrot.jbcrypt.BCrypt
 
-class UserRepository : UserAccountStore {
-    fun upsert(
+class UserRepository(
+    private val avatarUrlResolver: (String) -> String = { it },
+) : UserAccountStore {
+    fun insertIfAbsent(
         id: String,
         username: String,
         password: String,
         displayName: String,
         avatarUrl: String?,
-    ) {
-        transaction {
-            val existingPasswordHash = UsersTable.selectAll()
-                .where { UsersTable.id eq id }
-                .singleOrNull()
-                ?.get(UsersTable.passwordHash)
-            val passwordHash = existingPasswordHash
-                ?.takeIf { BCrypt.checkpw(password, it) }
-                ?: BCrypt.hashpw(password, BCrypt.gensalt())
-
-            if (existingPasswordHash == null) {
-                UsersTable.insertIgnore {
-                    it[UsersTable.id] = id
-                    it[UsersTable.username] = username
-                    it[UsersTable.passwordHash] = passwordHash
-                    it[UsersTable.displayName] = displayName
-                    it[UsersTable.avatarUrl] = avatarUrl
-                }
-            } else {
-                UsersTable.update({ UsersTable.id eq id }) {
-                    it[UsersTable.username] = username
-                    it[UsersTable.passwordHash] = passwordHash
-                    it[UsersTable.displayName] = displayName
-                    it[UsersTable.avatarUrl] = avatarUrl
-                }
-            }
+    ): Boolean = transaction {
+        if (UsersTable.selectAll().where { UsersTable.id eq id }.any()) {
+            return@transaction true
         }
+        val inserted = UsersTable.insertIgnore {
+            it[UsersTable.id] = id
+            it[UsersTable.username] = username
+            it[UsersTable.passwordHash] = BCrypt.hashpw(password, BCrypt.gensalt())
+            it[UsersTable.displayName] = displayName
+            it[UsersTable.avatarUrl] = avatarUrl
+        }.insertedCount == 1
+        inserted || UsersTable.selectAll().where { UsersTable.id eq id }.any()
     }
 
     override fun findByUsername(username: String): UserAccountRecord? = transaction {
@@ -74,9 +62,17 @@ class UserRepository : UserAccountStore {
         } == 1
     }
 
-    override fun updateAvatarUrl(userId: String, avatarUrl: String): Boolean = transaction {
-        UsersTable.update({ UsersTable.id eq userId }) {
-            it[UsersTable.avatarUrl] = avatarUrl
+    override fun compareAndSetAvatar(
+        userId: String,
+        expectedVersion: Long,
+        objectKey: String,
+    ): Boolean = transaction {
+        UsersTable.update({
+            (UsersTable.id eq userId) and (UsersTable.avatarVersion eq expectedVersion)
+        }) {
+            it[avatarObjectKey] = objectKey
+            it[avatarUrl] = null
+            it[avatarVersion] = expectedVersion + 1
         } == 1
     }
 
@@ -86,11 +82,25 @@ class UserRepository : UserAccountStore {
         } == 1
     }
 
-    private fun ResultRow.toUserAccountRecord(): UserAccountRecord = UserAccountRecord(
-        userId = this[UsersTable.id],
-        username = this[UsersTable.username],
-        passwordHash = this[UsersTable.passwordHash],
-        displayName = this[UsersTable.displayName],
-        avatarUrl = this[UsersTable.avatarUrl],
-    )
+    override fun findReferencedObjectKeys(candidates: Set<String>): Set<String> {
+        if (candidates.isEmpty()) return emptySet()
+        return transaction {
+            UsersTable.selectAll()
+                .where { UsersTable.avatarObjectKey inList candidates }
+                .mapNotNullTo(mutableSetOf()) { it[UsersTable.avatarObjectKey] }
+        }
+    }
+
+    private fun ResultRow.toUserAccountRecord(): UserAccountRecord {
+        val objectKey = this[UsersTable.avatarObjectKey]
+        return UserAccountRecord(
+            userId = this[UsersTable.id],
+            username = this[UsersTable.username],
+            passwordHash = this[UsersTable.passwordHash],
+            displayName = this[UsersTable.displayName],
+            avatarUrl = objectKey?.let(avatarUrlResolver) ?: this[UsersTable.avatarUrl],
+            avatarObjectKey = objectKey,
+            avatarVersion = this[UsersTable.avatarVersion],
+        )
+    }
 }

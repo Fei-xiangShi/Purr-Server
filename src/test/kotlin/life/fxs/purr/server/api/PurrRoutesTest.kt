@@ -15,6 +15,12 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
+import io.ktor.server.testing.ApplicationTestBuilder
+import io.ktor.server.config.ApplicationConfig
+import io.ktor.server.config.MapApplicationConfig
+import io.ktor.server.config.mergeWith
+import com.sun.net.httpserver.HttpServer
+import java.net.InetSocketAddress
 import java.security.MessageDigest
 import java.sql.DriverManager
 import java.util.Base64
@@ -26,19 +32,30 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class PurrRoutesTest {
-    @Test
-    fun `health readiness and request ids are exposed`() = testApplication {
-        val response = client.get("/health/ready") {
-            header(HttpHeaders.XRequestId, "request-123")
-        }
+    private lateinit var activeDatabaseUrl: String
 
-        assertEquals(HttpStatusCode.OK, response.status)
-        assertEquals("request-123", response.headers[HttpHeaders.XRequestId])
-        assertTrue(response.bodyAsText().contains("\"status\":\"ok\""))
+    @Test
+    fun `health readiness and request ids are exposed`() {
+        AvatarHeadServer().use { storage ->
+            isolatedTestApplication(
+                mapOf(
+                    "purr.avatar.endpoint" to storage.endpoint,
+                    "purr.avatar.publicEndpoint" to storage.endpoint,
+                ),
+            ) {
+                val response = client.get("/health/ready") {
+                    header(HttpHeaders.XRequestId, "request-123")
+                }
+
+                assertEquals(HttpStatusCode.OK, response.status)
+                assertEquals("request-123", response.headers[HttpHeaders.XRequestId])
+                assertTrue(response.bodyAsText().contains("\"status\":\"ok\""))
+            }
+        }
     }
 
     @Test
-    fun `Prometheus metrics expose HTTP and JVM telemetry`() = testApplication {
+    fun `Prometheus metrics expose HTTP and JVM telemetry`() = isolatedTestApplication {
         client.get("/health/live")
 
         val response = client.get("/metrics")
@@ -47,10 +64,13 @@ class PurrRoutesTest {
         val body = response.bodyAsText()
         assertTrue(body.contains("jvm_memory_used_bytes"))
         assertTrue(body.contains("ktor_http_server_requests"))
+        assertTrue(body.contains("purr_avatar_uploads_total"))
+        assertTrue(body.contains("purr_avatar_cleanup_pending"))
+        assertTrue(body.contains("purr_avatar_cleanup_oldest_age_seconds"))
     }
 
     @Test
-    fun `invalid requests return structured validation errors`() = testApplication {
+    fun `invalid requests return structured validation errors`() = isolatedTestApplication {
         val response = client.post("/auth/login") {
             contentType(ContentType.Application.Json)
             setBody("""{"username":"","password":"password"}""")
@@ -62,7 +82,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `authentication endpoints are rate limited`() = testApplication {
+    fun `authentication endpoints are rate limited`() = isolatedTestApplication {
         val responses = List(11) {
             client.post("/auth/login") {
                 contentType(ContentType.Application.Json)
@@ -77,7 +97,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `login returns tokens and authenticated routes work`() = testApplication {
+    fun `login returns tokens and authenticated routes work`() = isolatedTestApplication {
         val login = client.post("/auth/login") {
             contentType(ContentType.Application.Json)
             setBody("""{"username":"user-a","password":"pass-a"}""")
@@ -106,7 +126,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `password change verifies current password and revokes all sessions`() = testApplication {
+    fun `password change verifies current password and revokes all sessions`() = isolatedTestApplication {
         val login = client.post("/auth/login") {
             contentType(ContentType.Application.Json)
             setBody("""{"username":"user-a","password":"pass-a"}""")
@@ -151,7 +171,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `authenticated user can update display name`() = testApplication {
+    fun `authenticated user can update display name`() = isolatedTestApplication {
         val accessToken = client.login("user-a", "pass-a")
 
         val updated = client.put("/me/profile") {
@@ -169,7 +189,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `refresh rotates session and logout revokes user sessions`() = testApplication {
+    fun `refresh rotates session and logout revokes user sessions`() = isolatedTestApplication {
         val login = client.post("/auth/login") {
             contentType(ContentType.Application.Json)
             setBody("""{"username":"user-a","password":"pass-a"}""")
@@ -209,7 +229,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `push registration is validated and removed when its auth session rotates`() = testApplication {
+    fun `push registration is validated and removed when its auth session rotates`() = isolatedTestApplication {
         val tokens = client.loginWithRefreshToken("user-a", "pass-a")
         val installationId = "550e8400-e29b-41d4-a716-446655440000"
         val token = "fcm-token-abcdefghijklmnopqrstuvwxyz-0123456789"
@@ -252,7 +272,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `push unregister is scoped to the authenticated user`() = testApplication {
+    fun `push unregister is scoped to the authenticated user`() = isolatedTestApplication {
         val userAToken = client.login("user-a", "pass-a")
         val userBToken = client.login("user-b", "pass-b")
         val installationId = "550e8400-e29b-41d4-a716-446655440001"
@@ -279,7 +299,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `refresh token can only be consumed once under concurrency`() = testApplication {
+    fun `refresh token can only be consumed once under concurrency`() = isolatedTestApplication {
         val login = client.post("/auth/login") {
             contentType(ContentType.Application.Json)
             setBody("""{"username":"user-a","password":"pass-a"}""")
@@ -308,7 +328,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `livekit webhook rejects oversized payload before signature processing`() = testApplication {
+    fun `livekit webhook rejects oversized payload before signature processing`() = isolatedTestApplication {
         val body = "x".repeat(1_048_577)
         val response = client.post("/webhooks/livekit") {
             contentType(ContentType.Application.Json)
@@ -321,7 +341,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `recording starts only after thirty seconds and valid calls remain pageable`() = testApplication {
+    fun `recording starts only after thirty seconds and valid calls remain pageable`() = isolatedTestApplication {
         val userAToken = client.login("user-a", "pass-a")
         val userBToken = client.login("user-b", "pass-b")
 
@@ -339,17 +359,21 @@ class PurrRoutesTest {
         assertTrue(!callId.isNullOrBlank(), "first session call id")
         assertTrue(!roomName.isNullOrBlank(), "first session room")
         assertTrue(sessionABody.contains("\"participantIdentity\":\"user-a-$callId\""), "caller identity")
+        assertTrue(sessionABody.contains("\"createdByRequest\":true"), "caller owns newly created session")
 
         val sessionB = client.post("/calls/session") {
             header("Authorization", "Bearer $userBToken")
             contentType(ContentType.Application.Json)
-            setBody("""{"pairId":"pair-demo","recordingConsent":true}""")
+            setBody(
+                """{"pairId":"pair-demo","expectedCallId":"$callId","recordingConsent":true}""",
+            )
         }
         val sessionBBody = sessionB.bodyAsText()
         assertEquals(HttpStatusCode.OK, sessionB.status)
         assertTrue(sessionBBody.contains("\"callId\":\"$callId\""), "callee joins call")
         assertTrue(sessionBBody.contains("\"roomName\":\"$roomName\""), "callee joins room")
         assertTrue(sessionBBody.contains("\"participantIdentity\":\"user-b-$callId\""), "callee identity")
+        assertTrue(sessionBBody.contains("\"createdByRequest\":false"), "callee joins without ownership")
 
         val initialCallStatus = client.get("/calls/$callId") {
             header("Authorization", "Bearer $userBToken")
@@ -570,7 +594,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `recording does not start without both recorded consents`() = testApplication {
+    fun `recording does not start without both recorded consents`() = isolatedTestApplication {
         val userAToken = client.login("user-a", "pass-a")
 
         val session = client.post("/calls/session") {
@@ -657,7 +681,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `explicit recording start is rejected before thirty seconds`() = testApplication {
+    fun `explicit recording start is rejected before thirty seconds`() = isolatedTestApplication {
         val userAToken = client.login("user-a", "pass-a")
         val userBToken = client.login("user-b", "pass-b")
 
@@ -731,7 +755,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `call session rejects missing recording consent`() = testApplication {
+    fun `call session rejects missing recording consent`() = isolatedTestApplication {
         val token = client.login("user-a", "pass-a")
         val response = client.post("/calls/session") {
             header("Authorization", "Bearer $token")
@@ -744,22 +768,57 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `call session rejects reconnection requests`() = testApplication {
+    fun `call session rejects an inactive expected incoming call`() = isolatedTestApplication {
         val token = client.login("user-a", "pass-a")
         val response = client.post("/calls/session") {
             header("Authorization", "Bearer $token")
             contentType(ContentType.Application.Json)
             setBody(
-                """{"pairId":"pair-demo","resumeCallId":"call-old","recordingConsent":true}""",
+                """{"pairId":"pair-demo","expectedCallId":"call-old","recordingConsent":true}""",
             )
         }
 
-        assertEquals(HttpStatusCode.BadRequest, response.status)
-        assertTrue(response.bodyAsText().contains("Call reconnection is not supported"))
+        assertEquals(HttpStatusCode.Conflict, response.status)
+        assertTrue(response.bodyAsText().contains("Incoming call is no longer active"))
     }
 
     @Test
-    fun `unanswered short call is hidden from history but detail keeps telemetry`() = testApplication {
+    fun `exact incoming call identity rejects caller replay and callee mismatch`() = isolatedTestApplication {
+        val callerToken = client.login("user-a", "pass-a")
+        val calleeToken = client.login("user-b", "pass-b")
+        val created = client.post("/calls/session") {
+            header("Authorization", "Bearer $callerToken")
+            contentType(ContentType.Application.Json)
+            setBody("""{"pairId":"pair-demo","recordingConsent":true}""")
+        }
+        assertEquals(HttpStatusCode.OK, created.status)
+        val callId = Regex("\\\"callId\\\":\\\"([^\\\"]+)\\\"")
+            .find(created.bodyAsText())
+            ?.groupValues
+            ?.get(1)
+        check(!callId.isNullOrBlank())
+
+        val callerReplay = client.post("/calls/session") {
+            header("Authorization", "Bearer $callerToken")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """{"pairId":"pair-demo","expectedCallId":"$callId","recordingConsent":true}""",
+            )
+        }
+        assertEquals(HttpStatusCode.Conflict, callerReplay.status)
+
+        val calleeMismatch = client.post("/calls/session") {
+            header("Authorization", "Bearer $calleeToken")
+            contentType(ContentType.Application.Json)
+            setBody(
+                """{"pairId":"pair-demo","expectedCallId":"call-mismatch","recordingConsent":true}""",
+            )
+        }
+        assertEquals(HttpStatusCode.Conflict, calleeMismatch.status)
+    }
+
+    @Test
+    fun `unanswered short call is hidden from history but detail keeps telemetry`() = isolatedTestApplication {
         val token = client.login("user-a", "pass-a")
         val session = client.post("/calls/session") {
             header(HttpHeaders.Authorization, "Bearer $token")
@@ -830,7 +889,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `rejects unknown pair`() = testApplication {
+    fun `rejects unknown pair`() = isolatedTestApplication {
         val token = client.login("user-a", "pass-a")
         val response = client.post("/calls/session") {
             header("Authorization", "Bearer $token")
@@ -840,6 +899,23 @@ class PurrRoutesTest {
 
         assertEquals(HttpStatusCode.BadRequest, response.status)
         assertTrue(response.bodyAsText().contains("Unknown pairId"))
+    }
+
+    private fun isolatedTestApplication(
+        overrides: Map<String, String> = emptyMap(),
+        block: suspend ApplicationTestBuilder.() -> Unit,
+    ) {
+        activeDatabaseUrl =
+            "jdbc:h2:mem:purr-routes-${System.nanoTime()};MODE=PostgreSQL;DB_CLOSE_DELAY=0"
+        val testOverrides = overrides + ("purr.database.jdbcUrl" to activeDatabaseUrl)
+        testApplication {
+            environment {
+                config = ApplicationConfig("application.yaml").mergeWith(
+                    MapApplicationConfig(*testOverrides.map { it.key to it.value }.toTypedArray()),
+                )
+            }
+            block()
+        }
     }
 
     private suspend fun HttpClient.login(username: String, password: String): String {
@@ -871,7 +947,7 @@ class PurrRoutesTest {
             ?: error("Missing $name in $this")
 
     private fun countPushDevices(installationId: String): Int = DriverManager.getConnection(
-        "jdbc:h2:mem:purr;MODE=PostgreSQL;DB_CLOSE_DELAY=0",
+        activeDatabaseUrl,
         "sa",
         "",
     ).use { connection ->
@@ -894,7 +970,7 @@ class PurrRoutesTest {
     private fun makeCallRecordingEligible(callId: String, releaseStartCommand: Boolean) {
         val nowEpochMillis = System.currentTimeMillis()
         DriverManager.getConnection(
-            "jdbc:h2:mem:purr;MODE=PostgreSQL;DB_CLOSE_DELAY=0",
+            activeDatabaseUrl,
             "sa",
             "",
         ).use { connection ->
@@ -937,5 +1013,23 @@ class PurrRoutesTest {
             .withIssuer("devkey")
             .withClaim("sha256", sha256)
             .sign(Algorithm.HMAC256("devsecret"))
+    }
+}
+
+private class AvatarHeadServer : AutoCloseable {
+    private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+        createContext("/") { exchange ->
+            exchange.sendResponseHeaders(
+                if (exchange.requestMethod == "HEAD") HttpStatusCode.OK.value else HttpStatusCode.MethodNotAllowed.value,
+                -1L,
+            )
+            exchange.close()
+        }
+        start()
+    }
+    val endpoint = "http://127.0.0.1:${server.address.port}"
+
+    override fun close() {
+        server.stop(0)
     }
 }

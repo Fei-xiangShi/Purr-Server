@@ -54,4 +54,5 @@ private fun ApplicationError.toHttpError(): Pair<HttpStatusCode, String> = when 
     ApplicationError.INVALID_ARGUMENT -> HttpStatusCode.BadRequest to "bad_request"
     ApplicationError.CONFLICT -> HttpStatusCode.Conflict to "conflict"
     ApplicationError.EXTERNAL_DEPENDENCY -> HttpStatusCode.BadGateway to "dependency_failure"
+    ApplicationError.TEMPORARILY_UNAVAILABLE -> HttpStatusCode.ServiceUnavailable to "temporarily_unavailable"
 }
