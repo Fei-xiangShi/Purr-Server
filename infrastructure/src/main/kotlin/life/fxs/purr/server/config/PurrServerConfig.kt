@@ -85,7 +85,7 @@ data class RecordingConfig(
 
 data class GoogleDriveConfig(
     val enabled: Boolean = false,
-    val serviceAccountPath: String = "",
+    val oauthCredentialPath: String = "",
     val folderId: String = "",
     val pollIntervalMillis: Long = 1_000,
     val leaseSeconds: Long = 3_600,

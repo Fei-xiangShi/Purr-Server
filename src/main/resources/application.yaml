@@ -66,7 +66,7 @@ purr:
     cleanupLeaseSeconds: 900
   googleDrive:
     enabled: false
-    serviceAccountPath: ""
+    oauthCredentialPath: ""
     folderId: ""
     pollIntervalMillis: 1000
     leaseSeconds: 3600

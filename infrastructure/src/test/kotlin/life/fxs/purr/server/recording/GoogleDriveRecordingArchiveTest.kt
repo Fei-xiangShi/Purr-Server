@@ -41,7 +41,7 @@ class GoogleDriveRecordingArchiveTest {
 
     private fun config() = GoogleDriveConfig(
         enabled = true,
-        serviceAccountPath = "/unused/test.json",
+        oauthCredentialPath = "/unused/test.json",
         folderId = "folder-1234567890",
     )
 

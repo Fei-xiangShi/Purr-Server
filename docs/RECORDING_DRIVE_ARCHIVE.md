@@ -4,13 +4,34 @@ Completed LiveKit recordings remain in the local MinIO recording bucket and are 
 
 ## Google Drive Setup
 
-1. Create a Google Cloud service account and enable the Google Drive API in its project.
-2. Create or select the destination Drive folder.
-3. Share that folder with the service-account email and grant Editor access.
-4. Store the service-account JSON outside the repository.
-5. Set `PURR_GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE` to that host file and `PURR_GOOGLE_DRIVE_FOLDER_ID` to the folder ID in `.env`.
+The archive uses OAuth 2.0 as the Google user, so uploads consume that user's personal Google One storage. A Google Workspace subscription or Shared Drive is not required.
 
-Compose mounts the credential read-only at `/run/secrets/purr-google-drive-service-account.json`. Credential content and access tokens must never be logged.
+1. Open [Google Cloud Console](https://console.cloud.google.com/), create or select a project, and enable **Google Drive API**.
+2. In **Google Auth Platform**, configure the app for an external audience, add the Google account as a test user, and add the `https://www.googleapis.com/auth/drive` scope.
+3. Create an OAuth client with application type **Desktop app**, then download its client JSON.
+4. Create or select a folder in **My Drive**. Copy the ID after `/drive/folders/` from the browser URL.
+5. Generate the server credential locally from the repository root:
+
+   ```bash
+   mkdir -p secrets
+   ./gradlew -Dorg.gradle.java.home=/usr/lib/jvm/zulu-17 \
+     :infrastructure:authorizeGoogleDrive \
+     --args="/path/to/client_secret.json secrets/google-drive-oauth.json"
+   ```
+
+   The command prints an official Google authorization URL and attempts to open it. Sign in with the account that owns the storage, approve access, and wait for the terminal to confirm that the credential was written.
+
+6. Set the OAuth app publishing status to **Production** before relying on unattended uploads. Google normally expires refresh tokens after seven days while an external app remains in Testing. A private, unverified app may show a warning; authorize only the account that owns this deployment and do not distribute the client.
+7. Configure `.env`:
+
+   ```dotenv
+   PURR_GOOGLE_DRIVE_OAUTH_CREDENTIAL_FILE=./secrets/google-drive-oauth.json
+   PURR_GOOGLE_DRIVE_FOLDER_ID=replace-with-google-drive-folder-id
+   ```
+
+Compose mounts the generated credential read-only at `/run/secrets/purr-google-drive-oauth.json`. The downloaded client JSON and generated authorized-user JSON must stay outside version control. Credential content, authorization codes, refresh tokens, and access tokens must never be logged.
+
+To recover from a revoked or expired grant, rerun `:infrastructure:authorizeGoogleDrive`, replace the generated credential file, and restart `purr-server`. Upload failures retain the local recording and continue retrying; they do not make it eligible for deletion.
 
 ## Delivery Guarantees
 

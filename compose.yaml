@@ -206,8 +206,8 @@ services:
     secrets:
       - source: purr-fcm-service-account
         target: purr-fcm-service-account.json
-      - source: purr-google-drive-service-account
-        target: purr-google-drive-service-account.json
+      - source: purr-google-drive-oauth
+        target: purr-google-drive-oauth.json
     environment:
       PURR_ENVIRONMENT: production
       PURR_LOG_LEVEL: ${PURR_LOG_LEVEL:-INFO}
@@ -267,7 +267,7 @@ services:
       PURR_RECORDING_CLEANUP_TIME_ZONE: ${PURR_RECORDING_CLEANUP_TIME_ZONE:-Asia/Shanghai}
       PURR_RECORDING_CLEANUP_LEASE_SECONDS: ${PURR_RECORDING_CLEANUP_LEASE_SECONDS:-900}
       PURR_GOOGLE_DRIVE_ENABLED: true
-      PURR_GOOGLE_DRIVE_SERVICE_ACCOUNT_PATH: /run/secrets/purr-google-drive-service-account.json
+      PURR_GOOGLE_DRIVE_OAUTH_CREDENTIAL_PATH: /run/secrets/purr-google-drive-oauth.json
       PURR_GOOGLE_DRIVE_FOLDER_ID: ${PURR_GOOGLE_DRIVE_FOLDER_ID:?PURR_GOOGLE_DRIVE_FOLDER_ID is required}
       PURR_GOOGLE_DRIVE_POLL_INTERVAL_MILLIS: ${PURR_GOOGLE_DRIVE_POLL_INTERVAL_MILLIS:-1000}
       PURR_GOOGLE_DRIVE_LEASE_SECONDS: ${PURR_GOOGLE_DRIVE_LEASE_SECONDS:-3600}
@@ -342,8 +342,8 @@ volumes:
 secrets:
   purr-fcm-service-account:
     file: ${PURR_PUSH_FCM_SERVICE_ACCOUNT_FILE:?PURR_PUSH_FCM_SERVICE_ACCOUNT_FILE is required}
-  purr-google-drive-service-account:
-    file: ${PURR_GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE:?PURR_GOOGLE_DRIVE_SERVICE_ACCOUNT_FILE is required}
+  purr-google-drive-oauth:
+    file: ${PURR_GOOGLE_DRIVE_OAUTH_CREDENTIAL_FILE:?PURR_GOOGLE_DRIVE_OAUTH_CREDENTIAL_FILE is required}
 
 networks:
   default:

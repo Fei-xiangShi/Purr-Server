@@ -132,7 +132,7 @@ class RecordingArchiveWorkerTest {
 
     private fun driveConfig() = GoogleDriveConfig(
         enabled = true,
-        serviceAccountPath = "/unused/test.json",
+        oauthCredentialPath = "/unused/test.json",
         folderId = "drive-folder-123456",
         pollIntervalMillis = 1_000,
         leaseSeconds = 60,

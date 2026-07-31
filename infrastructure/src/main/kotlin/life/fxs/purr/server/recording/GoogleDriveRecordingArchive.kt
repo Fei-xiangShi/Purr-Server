@@ -5,6 +5,7 @@ import com.google.api.client.http.InputStreamContent
 import com.google.api.client.json.gson.GsonFactory
 import com.google.auth.http.HttpCredentialsAdapter
 import com.google.auth.oauth2.GoogleCredentials
+import com.google.auth.oauth2.UserCredentials
 import java.io.FileInputStream
 import life.fxs.purr.server.application.port.RecordingRecord
 import life.fxs.purr.server.config.GoogleDriveConfig
@@ -110,14 +111,19 @@ private class GoogleApiDriveGateway(
     }
 }
 
-private fun loadDriveCredentials(config: GoogleDriveConfig): GoogleCredentials =
-    FileInputStream(config.serviceAccountPath).use { input ->
-        GoogleCredentials.fromStream(input).createScoped(DRIVE_SCOPE)
+internal fun loadDriveCredentials(config: GoogleDriveConfig): UserCredentials =
+    try {
+        FileInputStream(config.oauthCredentialPath).use(UserCredentials::fromStream)
+    } catch (error: Exception) {
+        throw IllegalArgumentException(
+            "Unable to load Google Drive OAuth authorized-user credentials",
+            error,
+        )
     }
 
 private fun String.escapeDriveQueryValue(): String = replace("\\", "\\\\").replace("'", "\\'")
 
 private const val APPLICATION_NAME = "purr-server recording archive"
-private const val DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
+internal const val GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 private const val RECORDING_PROPERTY = "purrRecordingId"
 private const val DEFAULT_CONTENT_TYPE = "application/octet-stream"

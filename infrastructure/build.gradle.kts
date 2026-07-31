@@ -31,3 +31,10 @@ dependencies {
     testImplementation(libs.embedded.postgres)
     testImplementation(enforcedPlatform(libs.embedded.postgres.binaries.bom))
 }
+
+tasks.register<JavaExec>("authorizeGoogleDrive") {
+    group = "application"
+    description = "Authorizes a personal Google Drive account and writes an authorized-user credential JSON."
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("life.fxs.purr.server.recording.GoogleDriveOAuthAuthorizer")
+}

@@ -82,9 +82,9 @@ class PurrConfigLoaderTest {
     }
 
     @Test
-    fun `enabled Google Drive archive requires credentials and a folder`() {
+    fun `enabled Google Drive archive requires OAuth credentials and a folder`() {
         val missingCredentials = validProductionConfig().copy(
-            googleDrive = validProductionConfig().googleDrive.copy(serviceAccountPath = ""),
+            googleDrive = validProductionConfig().googleDrive.copy(oauthCredentialPath = ""),
         )
         val missingFolder = validProductionConfig().copy(
             googleDrive = validProductionConfig().googleDrive.copy(folderId = ""),
@@ -322,7 +322,7 @@ class PurrConfigLoaderTest {
         ),
         googleDrive = GoogleDriveConfig(
             enabled = true,
-            serviceAccountPath = "/run/secrets/purr-google-drive.json",
+            oauthCredentialPath = "/run/secrets/purr-google-drive-oauth.json",
             folderId = "drive-folder-1234567890",
             pollIntervalMillis = 1_000,
             leaseSeconds = 3_600,

@@ -281,10 +281,10 @@ object PurrConfigLoader {
             ),
             googleDrive = GoogleDriveConfig(
                 enabled = boolean(config, "purr.googleDrive.enabled", "PURR_GOOGLE_DRIVE_ENABLED"),
-                serviceAccountPath = string(
+                oauthCredentialPath = string(
                     config,
-                    "purr.googleDrive.serviceAccountPath",
-                    "PURR_GOOGLE_DRIVE_SERVICE_ACCOUNT_PATH",
+                    "purr.googleDrive.oauthCredentialPath",
+                    "PURR_GOOGLE_DRIVE_OAUTH_CREDENTIAL_PATH",
                 ),
                 folderId = string(config, "purr.googleDrive.folderId", "PURR_GOOGLE_DRIVE_FOLDER_ID"),
                 pollIntervalMillis = long(
@@ -428,8 +428,8 @@ object PurrConfigLoader {
             "Google Drive retry max must be between the base delay and 86400 seconds"
         }
         if (config.googleDrive.enabled) {
-            require(config.googleDrive.serviceAccountPath.isNotBlank()) {
-                "Google Drive service account path is required when recording archive is enabled"
+            require(config.googleDrive.oauthCredentialPath.isNotBlank()) {
+                "Google Drive OAuth credential path is required when recording archive is enabled"
             }
             require(config.googleDrive.folderId.matches(Regex("[A-Za-z0-9_-]{10,256}"))) {
                 "Google Drive folder ID is invalid"
