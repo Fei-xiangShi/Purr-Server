@@ -20,9 +20,9 @@ internal class GoogleDriveOAuthAuthorizationService(
     fun authorize(): UserCredentials {
         val state = stateGenerator.generate()
         return receiverFactory.create(state).use { receiver ->
-            val authorizationUrl = gateway.authorizationUrl(state, receiver.callbackUri)
+            val authorizationUrl = gateway.authorizationUrl(state, receiver.callbackBaseUri)
             authorizationUrlPresenter.present(authorizationUrl)
-            val credentials = gateway.exchange(receiver.awaitCode(timeout), receiver.callbackUri)
+            val credentials = gateway.exchange(receiver.awaitCode(timeout), receiver.callbackBaseUri)
             require(!credentials.refreshToken.isNullOrBlank()) {
                 "Google did not return a refresh token; revoke the app grant and authorize again"
             }
@@ -33,9 +33,9 @@ internal class GoogleDriveOAuthAuthorizationService(
 }
 
 internal interface OAuthAuthorizationGateway {
-    fun authorizationUrl(state: String, callbackUri: URI): URI
+    fun authorizationUrl(state: String, callbackBaseUri: URI): URI
 
-    fun exchange(code: String, callbackUri: URI): UserCredentials
+    fun exchange(code: String, callbackBaseUri: URI): UserCredentials
 }
 
 internal class GoogleUserAuthorizationGateway(
@@ -46,10 +46,10 @@ internal class GoogleUserAuthorizationGateway(
         .setScopes(listOf(GOOGLE_DRIVE_SCOPE))
         .build()
 
-    override fun authorizationUrl(state: String, callbackUri: URI): URI = authorizer.getAuthorizationUrl(
+    override fun authorizationUrl(state: String, callbackBaseUri: URI): URI = authorizer.getAuthorizationUrl(
         AUTHORIZATION_USER_ID,
         state,
-        callbackUri,
+        callbackBaseUri,
         mapOf(
             "access_type" to "offline",
             "include_granted_scopes" to "true",
@@ -57,8 +57,8 @@ internal class GoogleUserAuthorizationGateway(
         ),
     ).toURI()
 
-    override fun exchange(code: String, callbackUri: URI): UserCredentials =
-        authorizer.getCredentialsFromCode(code, callbackUri)
+    override fun exchange(code: String, callbackBaseUri: URI): UserCredentials =
+        authorizer.getCredentialsFromCode(code, callbackBaseUri)
 }
 
 internal fun interface OAuthCallbackReceiverFactory {
@@ -66,7 +66,7 @@ internal fun interface OAuthCallbackReceiverFactory {
 }
 
 internal interface OAuthCallbackReceiver : AutoCloseable {
-    val callbackUri: URI
+    val callbackBaseUri: URI
 
     fun awaitCode(timeout: Duration): String
 }

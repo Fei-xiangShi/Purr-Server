@@ -35,9 +35,9 @@ class GoogleDriveOAuthAuthorizationServiceTest {
 
         assertEquals("fixed-state", receiverState)
         assertEquals("fixed-state", gateway.authorizationState)
-        assertEquals(receiver.callbackUri, gateway.authorizationCallback)
+        assertEquals(receiver.callbackBaseUri, gateway.authorizationCallback)
         assertEquals("authorization-code", gateway.exchangedCode)
-        assertEquals(receiver.callbackUri, gateway.exchangeCallback)
+        assertEquals(receiver.callbackBaseUri, gateway.exchangeCallback)
         assertEquals(URI("https://accounts.example.test/authorize"), presentedUrl)
         assertEquals(credentials, storedCredentials)
         assertEquals(credentials, result)
@@ -96,7 +96,7 @@ class GoogleDriveOAuthAuthorizationServiceTest {
     }
 
     private class FakeReceiver : OAuthCallbackReceiver {
-        override val callbackUri: URI = URI("http://127.0.0.1:12345/oauth2/callback")
+        override val callbackBaseUri: URI = URI("http://127.0.0.1:12345/")
         var closed = false
 
         override fun awaitCode(timeout: Duration): String = "authorization-code"

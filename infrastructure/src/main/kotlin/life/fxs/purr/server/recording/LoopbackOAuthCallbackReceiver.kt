@@ -25,15 +25,16 @@ internal class LoopbackOAuthCallbackReceiver(
         start()
     }
 
-    override val callbackUri: URI = URI(
+    override val callbackBaseUri: URI = URI(
         "http",
         null,
         LOOPBACK_HOST,
         server.address.port,
-        CALLBACK_PATH,
+        "/",
         null,
         null,
     )
+    internal val callbackUri: URI = callbackBaseUri.resolve(CALLBACK_PATH.removePrefix("/"))
 
     override fun awaitCode(timeout: Duration): String = try {
         result.get(timeout.toMillis(), TimeUnit.MILLISECONDS)
@@ -86,4 +87,4 @@ private fun parseQuery(rawQuery: String?): Map<String, String> = rawQuery
     .orEmpty()
 
 private const val LOOPBACK_HOST = "127.0.0.1"
-private const val CALLBACK_PATH = "/oauth2/callback"
+private const val CALLBACK_PATH = "/oauth2callback"
