@@ -31,7 +31,7 @@ class GoogleDriveOAuthAuthorizationServiceTest {
             timeout = Duration.ofSeconds(1),
         )
 
-        service.authorize()
+        val result = service.authorize()
 
         assertEquals("fixed-state", receiverState)
         assertEquals("fixed-state", gateway.authorizationState)
@@ -40,6 +40,7 @@ class GoogleDriveOAuthAuthorizationServiceTest {
         assertEquals(receiver.callbackUri, gateway.exchangeCallback)
         assertEquals(URI("https://accounts.example.test/authorize"), presentedUrl)
         assertEquals(credentials, storedCredentials)
+        assertEquals(credentials, result)
         assertTrue(receiver.closed)
     }
 

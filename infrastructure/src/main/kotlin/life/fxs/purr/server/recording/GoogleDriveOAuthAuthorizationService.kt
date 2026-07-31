@@ -17,9 +17,9 @@ internal class GoogleDriveOAuthAuthorizationService(
     private val stateGenerator: OAuthStateGenerator = SecureOAuthStateGenerator,
     private val timeout: Duration = Duration.ofMinutes(10),
 ) {
-    fun authorize() {
+    fun authorize(): UserCredentials {
         val state = stateGenerator.generate()
-        receiverFactory.create(state).use { receiver ->
+        return receiverFactory.create(state).use { receiver ->
             val authorizationUrl = gateway.authorizationUrl(state, receiver.callbackUri)
             authorizationUrlPresenter.present(authorizationUrl)
             val credentials = gateway.exchange(receiver.awaitCode(timeout), receiver.callbackUri)
@@ -27,6 +27,7 @@ internal class GoogleDriveOAuthAuthorizationService(
                 "Google did not return a refresh token; revoke the app grant and authorize again"
             }
             credentialStore.save(credentials)
+            credentials
         }
     }
 }

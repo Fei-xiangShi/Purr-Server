@@ -9,20 +9,19 @@ The archive uses OAuth 2.0 as the Google user, so uploads consume that user's pe
 1. Open [Google Cloud Console](https://console.cloud.google.com/), create or select a project, and enable **Google Drive API**.
 2. In **Google Auth Platform**, configure the app for an external audience, add the Google account as a test user, and add the `https://www.googleapis.com/auth/drive` scope.
 3. Create an OAuth client with application type **Desktop app**, then download its client JSON.
-4. Create or select a folder in **My Drive**. Copy the ID after `/drive/folders/` from the browser URL.
-5. Generate the server credential locally from the repository root:
+4. Generate the server credential and archive folder locally from the repository root:
 
    ```bash
    mkdir -p secrets
    ./gradlew -Dorg.gradle.java.home=/usr/lib/jvm/zulu-17 \
      :infrastructure:authorizeGoogleDrive \
-     --args="/path/to/client_secret.json secrets/google-drive-oauth.json"
+     --args='/path/to/client_secret.json secrets/google-drive-oauth.json "Purr Recordings"'
    ```
 
-   The command prints an official Google authorization URL and attempts to open it. Sign in with the account that owns the storage, approve access, and wait for the terminal to confirm that the credential was written.
+   The folder name is optional and defaults to `Purr Recordings`. The command prints an official Google authorization URL and attempts to open it. Sign in with the account that owns the storage, approve access, and wait for the terminal to confirm that the credential and archive folder are ready. It creates the application-marked folder once, reuses it on later runs, and prints `PURR_GOOGLE_DRIVE_FOLDER_ID=<id>`.
 
-6. Set the OAuth app publishing status to **Production** before relying on unattended uploads. Google normally expires refresh tokens after seven days while an external app remains in Testing. A private, unverified app may show a warning; authorize only the account that owns this deployment and do not distribute the client.
-7. Configure `.env`:
+5. Set the OAuth app publishing status to **Production** before relying on unattended uploads. Google normally expires refresh tokens after seven days while an external app remains in Testing. A private, unverified app may show a warning; authorize only the account that owns this deployment and do not distribute the client.
+6. Configure `.env` with the folder ID printed by the authorization command:
 
    ```dotenv
    PURR_GOOGLE_DRIVE_OAUTH_CREDENTIAL_FILE=./secrets/google-drive-oauth.json

@@ -61,11 +61,7 @@ internal interface GoogleDriveGateway : AutoCloseable {
 private class GoogleApiDriveGateway(
     credentials: GoogleCredentials,
 ) : GoogleDriveGateway {
-    private val drive = Drive.Builder(
-        GoogleNetHttpTransport.newTrustedTransport(),
-        GsonFactory.getDefaultInstance(),
-        HttpCredentialsAdapter(credentials),
-    ).setApplicationName(APPLICATION_NAME).build()
+    private val drive = GoogleDriveClientFactory.create(credentials)
 
     override fun find(folderId: String, recordingId: String): String? {
         val escapedRecordingId = recordingId.escapeDriveQueryValue()
@@ -109,6 +105,14 @@ private class GoogleApiDriveGateway(
             .execute()
             .id
     }
+}
+
+internal object GoogleDriveClientFactory {
+    fun create(credentials: GoogleCredentials): Drive = Drive.Builder(
+        GoogleNetHttpTransport.newTrustedTransport(),
+        GsonFactory.getDefaultInstance(),
+        HttpCredentialsAdapter(credentials),
+    ).setApplicationName(APPLICATION_NAME).build()
 }
 
 internal fun loadDriveCredentials(config: GoogleDriveConfig): UserCredentials =
