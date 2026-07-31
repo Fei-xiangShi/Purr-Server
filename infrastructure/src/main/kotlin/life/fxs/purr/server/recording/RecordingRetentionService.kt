@@ -1,6 +1,9 @@
 package life.fxs.purr.server.recording
 
 import java.time.Instant
+import java.time.LocalTime
+import java.time.ZoneId
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
@@ -21,6 +24,8 @@ class RecordingRetentionService(
     private val repository: CallRecordingRepository,
     private val objectStore: RecordingObjectStore,
     private val nowProvider: () -> Instant = Instant::now,
+    private val workerId: String = "recording-retention-${UUID.randomUUID()}",
+    private val delayProvider: suspend (Long) -> Unit = { delay(it) },
 ) : AutoCloseable {
     private val logger = LoggerFactory.getLogger(javaClass)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -33,50 +38,79 @@ class RecordingRetentionService(
         job = scope.launch {
             while (isActive && !closed.get()) {
                 try {
-                    cleanupOnce()
+                    delayProvider(millisUntilNextRun(nowProvider()))
+                    cleanupScheduledPass()
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Throwable) {
                     logger.error("Recording retention pass failed", error)
                 }
-                delay(config.cleanupIntervalSeconds * MILLIS_PER_SECOND)
             }
         }
     }
 
+    internal fun nextCleanupInstant(now: Instant): Instant {
+        val zone = ZoneId.of(config.cleanupTimeZone)
+        val localNow = now.atZone(zone)
+        val cleanupTime = LocalTime.of(config.cleanupHour, config.cleanupMinute)
+        var next = localNow.toLocalDate().atTime(cleanupTime).atZone(zone).toInstant()
+        if (!next.isAfter(now)) {
+            next = localNow.toLocalDate().plusDays(1).atTime(cleanupTime).atZone(zone).toInstant()
+        }
+        return next
+    }
+
+    internal fun millisUntilNextRun(now: Instant): Long =
+        (nextCleanupInstant(now).toEpochMilli() - now.toEpochMilli()).coerceAtLeast(1L)
+
     internal fun cleanupOnce(now: Instant = nowProvider()): RecordingCleanupSummary {
         val nowEpochMillis = now.toEpochMilli()
         val candidates = repository.findRetentionCandidates(
-            updatedBeforeEpochMillis = now.minusSeconds(config.retentionDays * SECONDS_PER_DAY).toEpochMilli(),
-            retryBeforeEpochMillis = nowEpochMillis - config.cleanupIntervalSeconds * MILLIS_PER_SECOND,
-            maxAttempts = config.cleanupMaxAttempts,
+            endedBeforeEpochMillis = now.minusSeconds(config.retentionDays * SECONDS_PER_DAY).toEpochMilli(),
+            nowEpochMillis = nowEpochMillis,
             limit = config.cleanupBatchSize,
         )
         var claimed = 0
         var deleted = 0
         var failed = 0
         candidates.forEach { candidate ->
-            val leased = repository.claimDeletion(candidate, nowEpochMillis, config.cleanupMaxAttempts)
+            val leased = repository.claimDeletion(
+                candidate = candidate,
+                workerId = workerId,
+                attemptedAtEpochMillis = nowEpochMillis,
+                leaseUntilEpochMillis = now.plusSeconds(config.cleanupLeaseSeconds).toEpochMilli(),
+            )
                 ?: return@forEach
             claimed++
-            val objectKey = leased.objectKey ?: return@forEach
-            runCatching { objectStore.delete(objectKey) }
+            runCatching {
+                objectStore.delete(checkNotNull(leased.objectKey) { "Claimed recording has no local object key" })
+            }
                 .onSuccess {
-                    repository.markDeleted(leased.recordingId, nowEpochMillis)
-                    deleted++
+                    if (repository.markDeleted(leased.recordingId, workerId, nowEpochMillis)) deleted++
                 }
                 .onFailure { error ->
                     val message = error.message ?: "Recording object deletion failed"
-                    repository.recordDeletionFailure(leased.recordingId, message)
+                    repository.recordDeletionFailure(leased.recordingId, workerId, message)
                     failed++
-                    if (leased.deletionAttempts >= config.cleanupMaxAttempts) {
-                        logger.error("Recording deletion exhausted retries for {}", leased.recordingId, error)
-                    } else {
-                        logger.warn("Recording deletion failed for {}; it will be retried", leased.recordingId, error)
-                    }
+                    logger.warn("Recording deletion failed for {}; it will be retried", leased.recordingId, error)
                 }
         }
         return RecordingCleanupSummary(candidates.size, claimed, deleted, failed)
+    }
+
+    internal fun cleanupScheduledPass(now: Instant = nowProvider()): RecordingCleanupSummary {
+        var total = RecordingCleanupSummary(0, 0, 0, 0)
+        var batch: RecordingCleanupSummary
+        do {
+            batch = cleanupOnce(now)
+            total = RecordingCleanupSummary(
+                candidates = total.candidates + batch.candidates,
+                claimed = total.claimed + batch.claimed,
+                deleted = total.deleted + batch.deleted,
+                failed = total.failed + batch.failed,
+            )
+        } while (batch.candidates == config.cleanupBatchSize && batch.claimed > 0)
+        return total
     }
 
     override fun close() {
@@ -87,7 +121,6 @@ class RecordingRetentionService(
     }
 
     private companion object {
-        const val MILLIS_PER_SECOND = 1_000L
         const val SECONDS_PER_DAY = 86_400L
     }
 }

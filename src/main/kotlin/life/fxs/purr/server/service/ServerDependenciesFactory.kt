@@ -58,6 +58,8 @@ import life.fxs.purr.server.avatar.AvatarOrphanReconciler
 import life.fxs.purr.server.avatar.JvmAvatarImageProcessor
 import life.fxs.purr.server.avatar.S3AvatarObjectStore
 import life.fxs.purr.server.recording.RecordingRetentionService
+import life.fxs.purr.server.recording.GoogleDriveRecordingArchive
+import life.fxs.purr.server.recording.RecordingArchiveWorker
 import life.fxs.purr.server.ratelimit.AuthRateLimiter
 import life.fxs.purr.server.ratelimit.AuthRateLimiterFactory
 import life.fxs.purr.server.redis.RedisClientResources
@@ -109,6 +111,8 @@ data class ServerDependencies(
     private val avatarCleanupWorker: AvatarCleanupWorker,
     private val recordingRecoveryService: RecordingRecoveryService,
     private val recordingRetentionService: RecordingRetentionService,
+    private val recordingArchiveWorker: RecordingArchiveWorker,
+    private val googleDriveResource: AutoCloseable?,
     private val recordingCommandDispatcher: RecordingCommandDispatcher,
     private val callRoomReconciliationWorker: CallRoomReconciliationWorker?,
     private val outboxDispatcher: OutboxDispatcher,
@@ -136,6 +140,11 @@ data class ServerDependencies(
         }
         try {
             recordingRetentionService.close()
+        } catch (error: Throwable) {
+            failure?.addSuppressed(error) ?: run { failure = error }
+        }
+        try {
+            recordingArchiveWorker.close()
         } catch (error: Throwable) {
             failure?.addSuppressed(error) ?: run { failure = error }
         }
@@ -170,6 +179,11 @@ data class ServerDependencies(
             failure?.addSuppressed(error) ?: run { failure = error }
         }
         try {
+            googleDriveResource?.close()
+        } catch (error: Throwable) {
+            failure?.addSuppressed(error) ?: run { failure = error }
+        }
+        try {
             avatarCleanupWorker.close()
         } catch (error: Throwable) {
             failure?.addSuppressed(error) ?: run { failure = error }
@@ -199,10 +213,12 @@ object ServerDependenciesFactory {
         var authRateLimiterResource: AuthRateLimiter? = null
         var recordingDownloadResource: AutoCloseable? = null
         var recordingObjectStoreResource: AutoCloseable? = null
+        var googleDriveResource: AutoCloseable? = null
         var avatarObjectStoreResource: AutoCloseable? = null
         var avatarCleanupWorkerResource: AvatarCleanupWorker? = null
         var recordingRecoveryService: RecordingRecoveryService? = null
         var recordingRetentionService: RecordingRetentionService? = null
+        var recordingArchiveWorker: RecordingArchiveWorker? = null
         var recordingCommandDispatcher: RecordingCommandDispatcher? = null
         var callRoomReconciliationWorker: CallRoomReconciliationWorker? = null
         var outboxDispatcher: OutboxDispatcher? = null
@@ -317,6 +333,16 @@ object ServerDependenciesFactory {
                 .also { recordingDownloadResource = it }
             val recordingObjectStore = S3RecordingObjectStore(config.recording)
                 .also { recordingObjectStoreResource = it }
+            val googleDriveArchive = config.googleDrive.enabled.takeIf { it }
+                ?.let { GoogleDriveRecordingArchive(config.googleDrive) }
+                .also { googleDriveResource = it }
+            val archiveWorker = RecordingArchiveWorker(
+                config = config.googleDrive,
+                repository = callRecordingRepository,
+                objectReader = recordingObjectStore,
+                uploader = googleDriveArchive,
+            ).also { it.start() }
+            recordingArchiveWorker = archiveWorker
             val avatarService = AvatarService(
                 userAccountReader = userRepository,
                 userProfileStore = userRepository,
@@ -388,6 +414,7 @@ object ServerDependenciesFactory {
                 recordingCommandStore = recordingCommandRepository,
                 transaction = applicationTransaction,
                 recordingCommandWakeup = commandDispatcher,
+                recordingArchiveWakeup = archiveWorker,
             )
             val reconciliationWorker = roomParticipantReader?.let { reader ->
                 CallRoomReconciliationWorker(
@@ -499,6 +526,8 @@ object ServerDependenciesFactory {
                 avatarCleanupWorker = avatarCleanupWorker,
                 recordingRecoveryService = recoveryService,
                 recordingRetentionService = retentionService,
+                recordingArchiveWorker = archiveWorker,
+                googleDriveResource = googleDriveArchive,
                 recordingCommandDispatcher = commandDispatcher,
                 callRoomReconciliationWorker = reconciliationWorker,
                 outboxDispatcher = dispatcher,
@@ -520,6 +549,9 @@ object ServerDependenciesFactory {
             runCatching { recordingRetentionService?.close() }
                 .exceptionOrNull()
                 ?.let(error::addSuppressed)
+            runCatching { recordingArchiveWorker?.close() }
+                .exceptionOrNull()
+                ?.let(error::addSuppressed)
             runCatching { realtimeResource?.close() }
                 .exceptionOrNull()
                 ?.let(error::addSuppressed)
@@ -533,6 +565,9 @@ object ServerDependenciesFactory {
                 .exceptionOrNull()
                 ?.let(error::addSuppressed)
             runCatching { recordingObjectStoreResource?.close() }
+                .exceptionOrNull()
+                ?.let(error::addSuppressed)
+            runCatching { googleDriveResource?.close() }
                 .exceptionOrNull()
                 ?.let(error::addSuppressed)
             runCatching { avatarCleanupWorkerResource?.close() }

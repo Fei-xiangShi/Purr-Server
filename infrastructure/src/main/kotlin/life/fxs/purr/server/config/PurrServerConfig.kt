@@ -13,6 +13,7 @@ data class PurrServerConfig(
     val rateLimit: AuthRateLimitConfig,
     val database: DatabaseConfig,
     val callReconciliation: CallReconciliationConfig = CallReconciliationConfig(),
+    val googleDrive: GoogleDriveConfig = GoogleDriveConfig(),
 )
 
 enum class RuntimeEnvironment {
@@ -76,6 +77,20 @@ data class RecordingConfig(
     val cleanupIntervalSeconds: Long,
     val cleanupBatchSize: Int,
     val cleanupMaxAttempts: Int,
+    val cleanupHour: Int = 17,
+    val cleanupMinute: Int = 0,
+    val cleanupTimeZone: String = "Asia/Shanghai",
+    val cleanupLeaseSeconds: Long = 900,
+)
+
+data class GoogleDriveConfig(
+    val enabled: Boolean = false,
+    val serviceAccountPath: String = "",
+    val folderId: String = "",
+    val pollIntervalMillis: Long = 1_000,
+    val leaseSeconds: Long = 3_600,
+    val retryBaseSeconds: Long = 5,
+    val retryMaxSeconds: Long = 3_600,
 )
 
 enum class RecordingProvider {

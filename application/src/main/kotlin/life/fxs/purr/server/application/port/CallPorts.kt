@@ -112,6 +112,15 @@ data class RecordingRecord(
     val deletionAttempts: Int,
     val lastDeletionAttemptAtEpochMillis: Long?,
     val deletionErrorMessage: String?,
+    val deletionLeaseOwner: String? = null,
+    val deletionLeaseUntilEpochMillis: Long? = null,
+    val driveFileId: String? = null,
+    val driveUploadedAtEpochMillis: Long? = null,
+    val driveUploadAttempts: Int = 0,
+    val driveUploadAvailableAtEpochMillis: Long? = null,
+    val driveUploadLeaseOwner: String? = null,
+    val driveUploadLeaseUntilEpochMillis: Long? = null,
+    val driveUploadErrorMessage: String? = null,
 )
 
 data class ProviderRecordingResult(
@@ -135,6 +144,10 @@ interface CallRecordingStore {
 
     fun findByRecordingId(recordingId: String): RecordingRecord?
 
+}
+
+fun interface RecordingArchiveWakeup {
+    fun wake()
 }
 
 interface RecordingConsentStore {

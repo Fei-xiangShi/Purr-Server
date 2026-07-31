@@ -8,6 +8,7 @@ import life.fxs.purr.server.application.port.ProviderRecordingResult
 import life.fxs.purr.server.application.port.RecordingController
 import life.fxs.purr.server.application.port.RecordingCommandStore
 import life.fxs.purr.server.application.port.RecordingCommandWakeup
+import life.fxs.purr.server.application.port.RecordingArchiveWakeup
 import life.fxs.purr.server.application.port.ApplicationTransaction
 import life.fxs.purr.server.model.CallState
 import life.fxs.purr.server.model.RecordingStatus
@@ -26,6 +27,7 @@ class CallRecordingWebhookService(
     private val recordingCommandStore: RecordingCommandStore? = null,
     private val transaction: ApplicationTransaction = ImmediateRecordingWebhookTransaction,
     private val recordingCommandWakeup: RecordingCommandWakeup? = null,
+    private val recordingArchiveWakeup: RecordingArchiveWakeup? = null,
 ) {
     fun handle(recordingId: String, result: ProviderRecordingResult) {
         if (recordingId.isBlank()) return
@@ -34,6 +36,9 @@ class CallRecordingWebhookService(
                 ?.let { callSessionStore.find(it.callId) }
             ?: return
         val updated = updateRecording(call.callId, result.copy(recordingId = recordingId))
+        if (result.status == RecordingStatus.STOPPED && updated != null) {
+            recordingArchiveWakeup?.wake()
+        }
         maybeStopEndedCallRecording(updated)
     }
 

@@ -56,10 +56,22 @@ purr:
     downloadUrlTtlSeconds: 300
     consentPolicyVersion: "2026-01"
     cleanupEnabled: false
-    retentionDays: 30
+    retentionDays: 7
     cleanupIntervalSeconds: 3600
     cleanupBatchSize: 100
     cleanupMaxAttempts: 10
+    cleanupHour: 17
+    cleanupMinute: 0
+    cleanupTimeZone: Asia/Shanghai
+    cleanupLeaseSeconds: 900
+  googleDrive:
+    enabled: false
+    serviceAccountPath: ""
+    folderId: ""
+    pollIntervalMillis: 1000
+    leaseSeconds: 3600
+    retryBaseSeconds: 5
+    retryMaxSeconds: 3600
   avatar:
     bucket: purr-avatars
     endpoint: "http://localhost:9000"

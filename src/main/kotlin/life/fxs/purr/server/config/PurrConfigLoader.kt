@@ -2,6 +2,7 @@ package life.fxs.purr.server.config
 
 import io.ktor.server.config.ApplicationConfig
 import java.net.URI
+import java.time.ZoneId
 
 object PurrConfigLoader {
     fun load(config: ApplicationConfig): PurrServerConfig {
@@ -109,6 +110,18 @@ object PurrConfigLoader {
                     config,
                     "purr.recording.cleanupMaxAttempts",
                     "PURR_RECORDING_CLEANUP_MAX_ATTEMPTS",
+                ),
+                cleanupHour = int(config, "purr.recording.cleanupHour", "PURR_RECORDING_CLEANUP_HOUR"),
+                cleanupMinute = int(config, "purr.recording.cleanupMinute", "PURR_RECORDING_CLEANUP_MINUTE"),
+                cleanupTimeZone = string(
+                    config,
+                    "purr.recording.cleanupTimeZone",
+                    "PURR_RECORDING_CLEANUP_TIME_ZONE",
+                ),
+                cleanupLeaseSeconds = long(
+                    config,
+                    "purr.recording.cleanupLeaseSeconds",
+                    "PURR_RECORDING_CLEANUP_LEASE_SECONDS",
                 ),
             ),
             avatar = AvatarConfig(
@@ -266,6 +279,31 @@ object PurrConfigLoader {
                     "PURR_CALL_RECONCILIATION_BATCH_SIZE",
                 ),
             ),
+            googleDrive = GoogleDriveConfig(
+                enabled = boolean(config, "purr.googleDrive.enabled", "PURR_GOOGLE_DRIVE_ENABLED"),
+                serviceAccountPath = string(
+                    config,
+                    "purr.googleDrive.serviceAccountPath",
+                    "PURR_GOOGLE_DRIVE_SERVICE_ACCOUNT_PATH",
+                ),
+                folderId = string(config, "purr.googleDrive.folderId", "PURR_GOOGLE_DRIVE_FOLDER_ID"),
+                pollIntervalMillis = long(
+                    config,
+                    "purr.googleDrive.pollIntervalMillis",
+                    "PURR_GOOGLE_DRIVE_POLL_INTERVAL_MILLIS",
+                ),
+                leaseSeconds = long(config, "purr.googleDrive.leaseSeconds", "PURR_GOOGLE_DRIVE_LEASE_SECONDS"),
+                retryBaseSeconds = long(
+                    config,
+                    "purr.googleDrive.retryBaseSeconds",
+                    "PURR_GOOGLE_DRIVE_RETRY_BASE_SECONDS",
+                ),
+                retryMaxSeconds = long(
+                    config,
+                    "purr.googleDrive.retryMaxSeconds",
+                    "PURR_GOOGLE_DRIVE_RETRY_MAX_SECONDS",
+                ),
+            ),
         )
         validate(serverConfig)
         return serverConfig
@@ -365,6 +403,37 @@ object PurrConfigLoader {
         }
         require(config.recording.cleanupMaxAttempts in 1..100) {
             "Recording cleanup max attempts must be between 1 and 100"
+        }
+        require(config.recording.cleanupHour in 0..23) {
+            "Recording cleanup hour must be between 0 and 23"
+        }
+        require(config.recording.cleanupMinute in 0..59) {
+            "Recording cleanup minute must be between 0 and 59"
+        }
+        runCatching { ZoneId.of(config.recording.cleanupTimeZone) }
+            .getOrElse { throw IllegalArgumentException("Recording cleanup timezone is invalid", it) }
+        require(config.recording.cleanupLeaseSeconds in 30..86_400) {
+            "Recording cleanup lease must be between 30 and 86400 seconds"
+        }
+        require(config.googleDrive.pollIntervalMillis in 100..60_000) {
+            "Google Drive poll interval must be between 100 and 60000 milliseconds"
+        }
+        require(config.googleDrive.leaseSeconds in 60..86_400) {
+            "Google Drive upload lease must be between 60 and 86400 seconds"
+        }
+        require(config.googleDrive.retryBaseSeconds in 1..3_600) {
+            "Google Drive retry base must be between 1 and 3600 seconds"
+        }
+        require(config.googleDrive.retryMaxSeconds in config.googleDrive.retryBaseSeconds..86_400) {
+            "Google Drive retry max must be between the base delay and 86400 seconds"
+        }
+        if (config.googleDrive.enabled) {
+            require(config.googleDrive.serviceAccountPath.isNotBlank()) {
+                "Google Drive service account path is required when recording archive is enabled"
+            }
+            require(config.googleDrive.folderId.matches(Regex("[A-Za-z0-9_-]{10,256}"))) {
+                "Google Drive folder ID is invalid"
+            }
         }
         requireHttpEndpoint(config.recording.endpoint, "Recording storage endpoint")
         val recordingPublicEndpoint = requireHttpEndpoint(
@@ -526,6 +595,9 @@ object PurrConfigLoader {
             }
             require(!config.recording.enabled || config.recording.cleanupEnabled) {
                 "Enabled production recording must enable retention cleanup"
+            }
+            require(!config.recording.enabled || config.googleDrive.enabled) {
+                "Enabled production recording must enable Google Drive archive"
             }
             require(config.realtime.provider == RealtimeProvider.REDIS) {
                 "Production realtime delivery must use the Redis provider"

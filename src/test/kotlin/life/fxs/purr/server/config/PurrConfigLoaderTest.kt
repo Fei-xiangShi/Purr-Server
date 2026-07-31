@@ -82,6 +82,19 @@ class PurrConfigLoaderTest {
     }
 
     @Test
+    fun `enabled Google Drive archive requires credentials and a folder`() {
+        val missingCredentials = validProductionConfig().copy(
+            googleDrive = validProductionConfig().googleDrive.copy(serviceAccountPath = ""),
+        )
+        val missingFolder = validProductionConfig().copy(
+            googleDrive = validProductionConfig().googleDrive.copy(folderId = ""),
+        )
+
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(missingCredentials) }
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(missingFolder) }
+    }
+
+    @Test
     fun `production avatar storage requires TLS cleanup and strong credentials`() {
         val insecureEndpoint = validProductionConfig().copy(
             avatar = validProductionConfig().avatar.copy(publicEndpoint = "http://avatars.example.com"),
@@ -306,6 +319,15 @@ class PurrConfigLoaderTest {
             waitingTtlSeconds = 120,
             emptyRoomGraceSeconds = 15,
             batchSize = 100,
+        ),
+        googleDrive = GoogleDriveConfig(
+            enabled = true,
+            serviceAccountPath = "/run/secrets/purr-google-drive.json",
+            folderId = "drive-folder-1234567890",
+            pollIntervalMillis = 1_000,
+            leaseSeconds = 3_600,
+            retryBaseSeconds = 5,
+            retryMaxSeconds = 3_600,
         ),
     )
 }

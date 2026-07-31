@@ -22,6 +22,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.slf4j.api)
     implementation(libs.google.auth.oauth2.http)
+    implementation(libs.google.api.services.drive)
     implementation(libs.metadata.extractor)
 
     runtimeOnly(libs.postgresql)

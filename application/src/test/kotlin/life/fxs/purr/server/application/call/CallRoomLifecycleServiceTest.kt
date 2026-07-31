@@ -27,6 +27,7 @@ import life.fxs.purr.server.application.port.RecordingCommandStore
 import life.fxs.purr.server.application.port.RecordingCommandType
 import life.fxs.purr.server.application.port.RecordingController
 import life.fxs.purr.server.application.port.RecordingRecord
+import life.fxs.purr.server.application.port.RecordingArchiveWakeup
 import life.fxs.purr.server.model.CallState
 import life.fxs.purr.server.model.RecordingStatus
 
@@ -341,6 +342,35 @@ private class FakeRecordingCommandStore : RecordingCommandStore {
 }
 
 class CallRecordingWebhookServiceTest {
+    @Test
+    fun `completed recording wakes asynchronous Drive archive`() {
+        val calls = MutableCallStore(
+            waitingCall().copy(
+                state = CallState.ACTIVE,
+                recordingStatus = RecordingStatus.RECORDING,
+                recordingId = "recording-1",
+            ),
+        )
+        var wakeups = 0
+        val service = CallRecordingWebhookService(
+            callSessionStore = calls,
+            callRecordingStore = FakeRecordingStore(calls),
+            recordingArchiveWakeup = RecordingArchiveWakeup { wakeups++ },
+        )
+
+        service.handle(
+            "recording-1",
+            ProviderRecordingResult(
+                status = RecordingStatus.STOPPED,
+                recordingId = "recording-1",
+                updatedAtEpochMillis = NOW.toEpochMilli(),
+                objectKey = "recordings/call-1/audio.ogg",
+            ),
+        )
+
+        assertEquals(1, wakeups)
+    }
+
     @Test
     fun `ended call stops active provider recording once across duplicate callbacks`() {
         val calls = MutableCallStore(
