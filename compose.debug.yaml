@@ -1,0 +1,11 @@
+services:
+  purr-server:
+    environment:
+      PURR_ENVIRONMENT: development
+      PURR_PUSH_ENABLED: "false"
+      PURR_PUSH_PROVIDER: fcm
+      PURR_PUSH_FCM_PROJECT_ID: local-debug
+      PURR_LIVEKIT_WS_URL: ws://${PURR_LIVEKIT_HOST:-127.0.0.1}:7880
+      PURR_RECORDING_ENABLED: "true"
+      PURR_GOOGLE_DRIVE_ENABLED: "false"
+

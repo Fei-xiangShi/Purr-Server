@@ -2,4 +2,5 @@
 build/
 .kotlin/
 .env
+.env.local
 secrets/

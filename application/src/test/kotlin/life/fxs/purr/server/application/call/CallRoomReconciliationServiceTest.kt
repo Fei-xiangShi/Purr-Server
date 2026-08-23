@@ -8,6 +8,11 @@ import life.fxs.purr.server.application.port.CallRoomEventHandler
 import life.fxs.purr.server.application.port.CallRoomParticipantReader
 import life.fxs.purr.server.application.port.CallRoomReconciliationStore
 import life.fxs.purr.server.application.port.WaitingCallTerminator
+import life.fxs.purr.server.application.port.RecordingCommandStore
+import life.fxs.purr.server.application.port.RecordingCommandRecord
+import life.fxs.purr.server.application.port.RecordingCommandType
+import life.fxs.purr.server.application.port.ProviderRecordingResult
+import life.fxs.purr.server.application.port.RecordingCommandState
 import life.fxs.purr.server.model.CallState
 import life.fxs.purr.server.model.RecordingStatus
 
@@ -78,6 +83,8 @@ class CallRoomReconciliationServiceTest {
         waitingTtlMillis = 1_000L,
         emptyRoomGraceMillis = 100L,
         batchSize = 10,
+        roomTerminator = NoOpRoomTerminator,
+        recordingCommandStore = NoOpRecordingCommandStore,
     )
 
     private class ReconciliationStore(var call: CallRecord) : CallRoomReconciliationStore {
@@ -116,6 +123,22 @@ class CallRoomReconciliationServiceTest {
         override fun endWaitingCall(callId: String, endedAtEpochMillis: Long) {
             callIds += callId
         }
+    }
+
+    private object NoOpRoomTerminator : life.fxs.purr.server.application.port.CallRoomTerminator {
+        override fun deleteRoom(roomName: String) = Unit
+    }
+
+    private object NoOpRecordingCommandStore : RecordingCommandStore {
+        private fun command(type: RecordingCommandType, callId: String, roomName: String, at: Long) =
+            RecordingCommandRecord("noop", "noop:$callId:${type.name}", callId, roomName, type, null, at, at, 0, null, null, RecordingCommandState.PENDING, null, null)
+        override fun enqueueStart(callId: String, roomName: String, requestedAtEpochMillis: Long, availableAtEpochMillis: Long) = command(RecordingCommandType.START, callId, roomName, requestedAtEpochMillis)
+        override fun enqueueStop(callId: String, roomName: String, recordingId: String?, requestedAtEpochMillis: Long) = command(RecordingCommandType.STOP, callId, roomName, requestedAtEpochMillis)
+        override fun enqueueRoomDelete(callId: String, roomName: String, requestedAtEpochMillis: Long) = command(RecordingCommandType.DELETE_ROOM, callId, roomName, requestedAtEpochMillis)
+        override fun claimBatch(workerId: String, nowEpochMillis: Long, leaseUntilEpochMillis: Long, maxAttempts: Int, limit: Int) = emptyList<RecordingCommandRecord>()
+        override fun markSucceeded(commandId: String, workerId: String, result: ProviderRecordingResult, completedAtEpochMillis: Long) = false
+        override fun markFailed(commandId: String, workerId: String, availableAtEpochMillis: Long, errorMessage: String, terminal: Boolean, completedAtEpochMillis: Long) = false
+        override fun findOpenForCall(callId: String, type: RecordingCommandType): RecordingCommandRecord? = null
     }
 
     private fun activeCall() = baseCall().copy(

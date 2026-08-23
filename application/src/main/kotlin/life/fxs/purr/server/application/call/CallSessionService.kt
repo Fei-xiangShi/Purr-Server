@@ -10,7 +10,6 @@ import life.fxs.purr.server.application.model.CallStatusResult
 import life.fxs.purr.server.application.model.CreateCallSessionCommand
 import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.application.port.CallSessionStore
-import life.fxs.purr.server.application.port.CallTerminator
 import life.fxs.purr.server.application.port.ApplicationTransaction
 import life.fxs.purr.server.application.port.MediaTokenIssuer
 import life.fxs.purr.server.application.port.RealtimeEvent
@@ -31,7 +30,6 @@ class CallSessionService(
     private val consentPolicyVersion: String,
     private val transaction: ApplicationTransaction,
     private val realtimeOutbox: RealtimeOutbox,
-    private val callTerminator: CallTerminator,
     private val nowProvider: () -> Instant = Instant::now,
     private val callIdProvider: () -> String = { "call-${UUID.randomUUID()}" },
 ) {
@@ -92,7 +90,13 @@ class CallSessionService(
 
     fun endCall(userId: String, callId: String) {
         callAccessPolicy.requireAccessibleCall(userId, callId)
-        callTerminator.terminate(callId, nowProvider().toEpochMilli())
+        // The HTTP end acknowledgement represents only this user's local
+        // hang-up. It must not transition the shared call to ENDED or delete
+        // the LiveKit room while the peer is still connected. The room
+        // lifecycle service observes the participant_left webhooks and ends
+        // the shared call only after the room has become empty (or LiveKit
+        // reports room_finished). Keeping this endpoint idempotent also lets
+        // the ApplicationScope retry it without blocking either participant.
     }
 
     private fun newCall(pairId: String, createdByUserId: String): CallRecord {

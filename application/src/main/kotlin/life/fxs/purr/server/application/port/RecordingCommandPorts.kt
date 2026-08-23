@@ -10,6 +10,7 @@ package life.fxs.purr.server.application.port
 enum class RecordingCommandType {
     START,
     STOP,
+    DELETE_ROOM,
 }
 
 enum class RecordingCommandState {
@@ -52,6 +53,12 @@ interface RecordingCommandStore {
         callId: String,
         roomName: String,
         recordingId: String?,
+        requestedAtEpochMillis: Long,
+    ): RecordingCommandRecord
+
+    fun enqueueRoomDelete(
+        callId: String,
+        roomName: String,
         requestedAtEpochMillis: Long,
     ): RecordingCommandRecord
 

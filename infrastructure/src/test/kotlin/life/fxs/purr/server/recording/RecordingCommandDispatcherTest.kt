@@ -56,6 +56,7 @@ class RecordingCommandDispatcherTest {
             repository = commandRepository,
             callSessionStore = callRepository,
             recordingController = controller,
+            roomTerminator = NoOpRoomTerminator,
             workerId = "worker-1",
         )
 
@@ -103,6 +104,7 @@ class RecordingCommandDispatcherTest {
             repository = commandRepository,
             callSessionStore = callRepository,
             recordingController = controller,
+            roomTerminator = NoOpRoomTerminator,
             workerId = "worker-1",
         )
 
@@ -150,6 +152,7 @@ class RecordingCommandDispatcherTest {
             repository = commandRepository,
             callSessionStore = callRepository,
             recordingController = controller,
+            roomTerminator = NoOpRoomTerminator,
             workerId = "worker-1",
         )
 
@@ -248,7 +251,7 @@ class RecordingCommandDispatcherTest {
         var startCalls = 0
         var stopCalls = 0
 
-        override fun startRecording(callId: String, roomName: String): ProviderRecordingResult {
+        override fun startRecording(callId: String, roomName: String, operationId: String): ProviderRecordingResult {
             startCalls++
             error("Provider start must not be called")
         }
@@ -257,6 +260,7 @@ class RecordingCommandDispatcherTest {
             callId: String,
             roomName: String,
             currentRecordingId: String?,
+            operationId: String,
         ): ProviderRecordingResult {
             stopCalls++
             error("Provider stop must not be called")
@@ -266,7 +270,7 @@ class RecordingCommandDispatcherTest {
     private class ReconciledRecordingController : RecordingController {
         val stopCalls = mutableListOf<String>()
 
-        override fun startRecording(callId: String, roomName: String): ProviderRecordingResult = error("Not used")
+        override fun startRecording(callId: String, roomName: String, operationId: String): ProviderRecordingResult = error("Not used")
 
         override fun findRecordingForOperation(
             callId: String,
@@ -282,6 +286,7 @@ class RecordingCommandDispatcherTest {
             callId: String,
             roomName: String,
             currentRecordingId: String?,
+            operationId: String,
         ): ProviderRecordingResult {
             val id = assertNotNull(currentRecordingId)
             stopCalls += id
@@ -296,7 +301,7 @@ class RecordingCommandDispatcherTest {
     private class StartingRecordingController : RecordingController {
         var startCalls = 0
 
-        override fun startRecording(callId: String, roomName: String): ProviderRecordingResult {
+        override fun startRecording(callId: String, roomName: String, operationId: String): ProviderRecordingResult {
             startCalls++
             return ProviderRecordingResult(
                 status = RecordingStatus.RECORDING,
@@ -309,6 +314,7 @@ class RecordingCommandDispatcherTest {
             callId: String,
             roomName: String,
             currentRecordingId: String?,
+            operationId: String,
         ): ProviderRecordingResult = error("Not used")
     }
 
@@ -316,5 +322,9 @@ class RecordingCommandDispatcherTest {
         const val CALL_ID = "call-1"
         const val PAIR_ID = "pair-1"
         const val ROOM_NAME = "pair-1-call-1"
+    }
+
+    private object NoOpRoomTerminator : life.fxs.purr.server.application.port.CallRoomTerminator {
+        override fun deleteRoom(roomName: String) = Unit
     }
 }

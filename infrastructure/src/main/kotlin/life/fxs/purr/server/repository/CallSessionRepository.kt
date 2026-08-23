@@ -287,6 +287,14 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
             .map { it.toCallRecord() }
     }
 
+    override fun findEndedCallsForRoomCleanup(limit: Int): List<CallRecord> = transaction {
+        CallSessionsTable.selectAll()
+            .where { CallSessionsTable.callState eq CallState.ENDED.wireValue }
+            .orderBy(CallSessionsTable.updatedAtEpochMillis to SortOrder.ASC)
+            .limit(limit)
+            .map { it.toCallRecord() }
+    }
+
     override fun observeRoomEmpty(
         callId: String,
         observedAtEpochMillis: Long,

@@ -121,6 +121,10 @@ data class RecordingRecord(
     val driveUploadLeaseOwner: String? = null,
     val driveUploadLeaseUntilEpochMillis: Long? = null,
     val driveUploadErrorMessage: String? = null,
+    val restoreAttempts: Int = 0,
+    val restoreLeaseOwner: String? = null,
+    val restoreLeaseUntilEpochMillis: Long? = null,
+    val restoreErrorMessage: String? = null,
 )
 
 data class ProviderRecordingResult(
@@ -160,24 +164,16 @@ fun interface MediaTokenIssuer {
     fun issueAccessToken(roomName: String, participantIdentity: String): String
 }
 
-interface RecordingController {
-    fun startRecording(callId: String, roomName: String): ProviderRecordingResult
+/** Provider-neutral operation for deleting a room after all egress resources are terminal. */
+fun interface CallRoomTerminator {
+    fun deleteRoom(roomName: String)
+}
 
-    /**
-     * Idempotent operation-aware form used by the durable command dispatcher.
-     * Existing adapters may keep implementing the legacy method; providers
-     * that support idempotency should use [operationId] as their request key.
-     */
+interface RecordingController {
     fun startRecording(
         callId: String,
         roomName: String,
         operationId: String,
-    ): ProviderRecordingResult = startRecording(callId, roomName)
-
-    fun stopRecording(
-        callId: String,
-        roomName: String,
-        currentRecordingId: String?,
     ): ProviderRecordingResult
 
     fun stopRecording(
@@ -185,7 +181,7 @@ interface RecordingController {
         roomName: String,
         currentRecordingId: String?,
         operationId: String,
-    ): ProviderRecordingResult = stopRecording(callId, roomName, currentRecordingId)
+    ): ProviderRecordingResult
 
     fun getRecording(recordingId: String): ProviderRecordingResult? = null
 
@@ -202,8 +198,11 @@ interface RecordingController {
     ): ProviderRecordingResult? = null
 }
 
-fun interface RecordingDownloadProvider {
-    fun create(recordingId: String, objectKey: String): RecordingDownloadResult
+interface RecordingDownloadProvider {
+    fun create(recording: RecordingRecord): RecordingDownloadResult
+
+    fun isAvailable(recording: RecordingRecord): Boolean =
+        recording.status == RecordingStatus.STOPPED && !recording.objectKey.isNullOrBlank()
 }
 
 data class RealtimeEvent(

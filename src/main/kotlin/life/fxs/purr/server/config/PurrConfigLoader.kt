@@ -303,6 +303,11 @@ object PurrConfigLoader {
                     "purr.googleDrive.retryMaxSeconds",
                     "PURR_GOOGLE_DRIVE_RETRY_MAX_SECONDS",
                 ),
+                restoreWaitTimeoutMillis = long(
+                    config,
+                    "purr.googleDrive.restoreWaitTimeoutMillis",
+                    "PURR_GOOGLE_DRIVE_RESTORE_WAIT_TIMEOUT_MILLIS",
+                ),
             ),
         )
         validate(serverConfig)
@@ -426,6 +431,9 @@ object PurrConfigLoader {
         }
         require(config.googleDrive.retryMaxSeconds in config.googleDrive.retryBaseSeconds..86_400) {
             "Google Drive retry max must be between the base delay and 86400 seconds"
+        }
+        require(config.googleDrive.restoreWaitTimeoutMillis in 1_000..900_000) {
+            "Google Drive restore wait timeout must be between 1000 and 900000 milliseconds"
         }
         if (config.googleDrive.enabled) {
             require(config.googleDrive.oauthCredentialPath.isNotBlank()) {

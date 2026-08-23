@@ -63,6 +63,21 @@ class RecordingCommandRepository(
         idempotencyKey = "stop:$callId",
     )
 
+    override fun enqueueRoomDelete(
+        callId: String,
+        roomName: String,
+        requestedAtEpochMillis: Long,
+    ): RecordingCommandRecord = enqueue(
+        callId = callId,
+        roomName = roomName,
+        type = RecordingCommandType.DELETE_ROOM,
+        recordingId = null,
+        requestedAtEpochMillis = requestedAtEpochMillis,
+        availableAtEpochMillis = requestedAtEpochMillis,
+        idempotencyKey = "delete-room:$callId",
+        commandId = "${commandIdProvider()}-delete-room",
+    )
+
     override fun claimBatch(
         workerId: String,
         nowEpochMillis: Long,
@@ -231,19 +246,26 @@ class RecordingCommandRepository(
     override fun reconcileOpenCalls(nowEpochMillis: Long): Int = transaction {
         val candidates = CallSessionsTable.selectAll()
             .where {
-                CallSessionsTable.recordingStatus inList listOf(
+                (CallSessionsTable.recordingStatus inList listOf(
                     RecordingStatus.STARTING.wireValue,
                     RecordingStatus.STOPPING.wireValue,
-                )
+                )) or (
+                    (CallSessionsTable.callState eq CallState.ENDED.wireValue) and
+                        (CallSessionsTable.recordingStatus inList listOf(
+                            RecordingStatus.STOPPED.wireValue,
+                            RecordingStatus.FAILED.wireValue,
+                            RecordingStatus.DELETED.wireValue,
+                        ))
+                    )
             }
             .map {
                 ReconciliationCandidate(
                     callId = it[CallSessionsTable.callId],
                     roomName = it[CallSessionsTable.roomName],
-                    type = if (it[CallSessionsTable.recordingStatus] == RecordingStatus.STARTING.wireValue) {
-                        RecordingCommandType.START
-                    } else {
-                        RecordingCommandType.STOP
+                    type = when {
+                        it[CallSessionsTable.callState] == CallState.ENDED.wireValue -> RecordingCommandType.DELETE_ROOM
+                        it[CallSessionsTable.recordingStatus] == RecordingStatus.STARTING.wireValue -> RecordingCommandType.START
+                        else -> RecordingCommandType.STOP
                     },
                     recordingId = it[CallSessionsTable.recordingId],
                 )
@@ -270,6 +292,7 @@ class RecordingCommandRepository(
             val key = when (candidate.type) {
                 RecordingCommandType.START -> "start:${candidate.callId}"
                 RecordingCommandType.STOP -> "stop:${candidate.callId}"
+                RecordingCommandType.DELETE_ROOM -> "delete-room:${candidate.callId}"
             }
             val commandId = commandIdProvider()
             RecordingCommandsTable.insertIgnore {
@@ -306,6 +329,7 @@ class RecordingCommandRepository(
         requestedAtEpochMillis: Long,
         availableAtEpochMillis: Long,
         idempotencyKey: String,
+        commandId: String = commandIdProvider(),
     ): RecordingCommandRecord = transaction {
         // Serializing against the call row makes the idempotency check safe on
         // databases that do not support partial unique indexes.
@@ -319,7 +343,6 @@ class RecordingCommandRepository(
             .singleOrNull()
         if (existing != null) return@transaction existing.toRecordingCommand()
 
-        val commandId = commandIdProvider()
         RecordingCommandsTable.insert {
             it[RecordingCommandsTable.commandId] = commandId
             it[RecordingCommandsTable.idempotencyKey] = idempotencyKey
@@ -361,11 +384,15 @@ class RecordingCommandRepository(
 
     /** STOP cannot overtake a START whose provider result is still uncertain. */
     private fun prerequisiteIsTerminal(command: ResultRow): Boolean {
-        if (command[RecordingCommandsTable.commandType] != RecordingCommandType.STOP.name) return true
+        val prerequisiteType = when (command[RecordingCommandsTable.commandType]) {
+            RecordingCommandType.STOP.name -> RecordingCommandType.START
+            RecordingCommandType.DELETE_ROOM.name -> RecordingCommandType.STOP
+            else -> return true
+        }
         val start = RecordingCommandsTable.selectAll()
             .where {
                 (RecordingCommandsTable.callId eq command[RecordingCommandsTable.callId]) and
-                    (RecordingCommandsTable.commandType eq RecordingCommandType.START.name)
+                    (RecordingCommandsTable.commandType eq prerequisiteType.name)
             }
             .limit(1)
             .singleOrNull()

@@ -13,7 +13,6 @@ import life.fxs.purr.server.config.RecordingConfig
 import life.fxs.purr.server.config.RecordingProvider
 import life.fxs.purr.server.db.DatabaseFactory
 import life.fxs.purr.server.application.port.CallRecord
-import life.fxs.purr.server.application.port.CallTerminator
 import life.fxs.purr.server.application.port.ApplicationTransaction
 import life.fxs.purr.server.application.port.MediaTokenIssuer
 import life.fxs.purr.server.application.port.ProviderRecordingResult
@@ -32,6 +31,7 @@ import life.fxs.purr.server.repository.CallRecordingRepository
 import life.fxs.purr.server.repository.CallRecordingConsentRepository
 import life.fxs.purr.server.repository.PairBondRepository
 import life.fxs.purr.server.repository.UserRepository
+import life.fxs.purr.server.repository.RecordingCommandRepository
 
 class CallApplicationServicesTest {
     @Test
@@ -95,7 +95,7 @@ class CallApplicationServicesTest {
     }
 
     @Test
-    fun `explicit end delegates active call termination and allows a new session`() {
+    fun `explicit end acknowledges local hangup without terminating the shared call`() {
         val databaseResources = DatabaseFactory(
             DatabaseConfig(
                 jdbcUrl = "jdbc:h2:mem:call-service-${System.nanoTime()};MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
@@ -164,10 +164,10 @@ class CallApplicationServicesTest {
             assertEquals(0, recordingController.stopCalls.size)
 
             val stored = repository.find(callId) ?: error("call not found")
-            assertEquals(CallState.ENDED, stored.state)
+            assertEquals(CallState.ACTIVE, stored.state)
             assertEquals(RecordingStatus.STARTING, stored.recordingStatus)
             assertEquals("egress-1", stored.recordingId)
-            assertEquals(stopTime.toEpochMilli(), stored.endedAtEpochMillis)
+            assertEquals(null, stored.endedAtEpochMillis)
 
             val nextSession = service.createSession(
                 userId = "user-a",
@@ -177,7 +177,7 @@ class CallApplicationServicesTest {
                     recordingConsent = false,
                 ),
             )
-            check(nextSession.callId != callId)
+            assertEquals(callId, nextSession.callId)
         } finally {
             (databaseResources.dataSource as? AutoCloseable)?.close()
         }
@@ -252,8 +252,8 @@ class CallApplicationServicesTest {
             start.countDown()
             val outcomes = futures.map { it.get(10, TimeUnit.SECONDS) }
 
-            assertEquals(1, outcomes.count { it })
-            assertEquals(1, recordingController.startCalls.size)
+            assertEquals(2, outcomes.count { it })
+            assertEquals(0, recordingController.startCalls.size)
         } finally {
             executor.shutdownNow()
             (databaseResources.dataSource as? AutoCloseable)?.close()
@@ -315,12 +315,11 @@ private fun createTestServices(
         callAccessPolicy = accessPolicy,
         pairService = pairService,
         callSessionStore = callSessionRepository,
-        callRecordingStore = callRecordingRepository,
         recordingConsentStore = callRecordingConsentRepository,
-        recordingController = recordingController,
         recordingEnabled = recordingConfig.enabled,
         consentPolicyVersion = recordingConfig.consentPolicyVersion,
         nowProvider = nowProvider,
+        recordingCommandStore = RecordingCommandRepository(callRecordingRepository) { "command-${System.nanoTime()}" },
     )
     val callSessionService = CallSessionService(
         pairService = pairService,
@@ -333,9 +332,6 @@ private fun createTestServices(
         consentPolicyVersion = recordingConfig.consentPolicyVersion,
         transaction = ImmediateTransaction,
         realtimeOutbox = RealtimeOutbox { _, _, _ -> },
-        callTerminator = CallTerminator { callId, endedAtEpochMillis ->
-            callSessionRepository.endIfOpen(callId, endedAtEpochMillis)
-        },
         nowProvider = nowProvider,
     )
     return TestCallServices(callSessionService, recordingCommandService)
@@ -362,7 +358,7 @@ private class FakeRecordingController(
     val startCalls = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
     val stopCalls = Collections.synchronizedList(mutableListOf<StopCall>())
 
-    override fun startRecording(callId: String, roomName: String): ProviderRecordingResult {
+    override fun startRecording(callId: String, roomName: String, operationId: String): ProviderRecordingResult {
         startCalls += callId to roomName
         return startResult ?: error("Not used in this test")
     }
@@ -371,6 +367,7 @@ private class FakeRecordingController(
         callId: String,
         roomName: String,
         currentRecordingId: String?,
+        operationId: String,
     ): ProviderRecordingResult {
         stopCalls += StopCall(callId, roomName, currentRecordingId)
         return stopResult

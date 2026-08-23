@@ -7,11 +7,14 @@ import life.fxs.purr.server.application.port.CallRoomEventType
 import life.fxs.purr.server.application.port.CallRoomParticipantReader
 import life.fxs.purr.server.application.port.CallRoomReconciliationStore
 import life.fxs.purr.server.application.port.WaitingCallTerminator
+import life.fxs.purr.server.application.port.CallRoomTerminator
+import life.fxs.purr.server.application.port.RecordingCommandStore
 import life.fxs.purr.server.model.CallState
+import life.fxs.purr.server.model.RecordingStatus
 
 /**
- * Periodic server-side convergence for calls whose provider webhook was lost
- * or whose client process disappeared without a clean disconnect. The empty
+ * Periodic server-side convergence for calls whose provider/client process
+ * restarted without a clean disconnect. The empty
  * observation is persisted, so multiple workers and restarts share the same
  * grace-period clock.
  */
@@ -23,6 +26,8 @@ class CallRoomReconciliationService(
     private val waitingTtlMillis: Long,
     private val emptyRoomGraceMillis: Long,
     private val batchSize: Int,
+    private val roomTerminator: CallRoomTerminator,
+    private val recordingCommandStore: RecordingCommandStore,
 ) {
     fun reconcileOnce(nowEpochMillis: Long): CallRoomReconciliationSummary {
         val calls = store.findOpenCalls(batchSize)
@@ -76,9 +81,23 @@ class CallRoomReconciliationService(
                     }
                     CallState.ENDED -> Unit
                 }
-            } catch (_: Throwable) {
+            } catch (error: Throwable) {
                 // A provider outage must leave the call untouched and retry on
                 // the next pass; one bad room must not abort the whole batch.
+                failed++
+            }
+        }
+        store.findEndedCallsForRoomCleanup(batchSize).forEach { call ->
+            try {
+                if (call.recordingStatus !in setOf(RecordingStatus.STARTING, RecordingStatus.RECORDING, RecordingStatus.STOPPING)) {
+                    recordingCommandStore.enqueueRoomDelete(
+                        callId = call.callId,
+                        roomName = call.roomName,
+                        requestedAtEpochMillis = nowEpochMillis,
+                    )
+                    converged++
+                }
+            } catch (error: Throwable) {
                 failed++
             }
         }

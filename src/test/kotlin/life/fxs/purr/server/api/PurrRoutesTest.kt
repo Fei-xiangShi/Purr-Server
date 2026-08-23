@@ -728,6 +728,17 @@ class PurrRoutesTest {
         }
         assertEquals(HttpStatusCode.OK, endCall.status)
 
+        client.postLiveKitWebhook(
+            """
+                {
+                  "event":"participant_left",
+                  "id":"event-$callId-final-left",
+                  "room":{"name":"pair-demo-$callId","numParticipants":0},
+                  "participant":{"identity":"user-a-$callId","state":"DISCONNECTED","kind":"STANDARD"}
+                }
+            """.trimIndent(),
+        )
+
         val endedCall = client.get("/calls/$callId") {
             header("Authorization", "Bearer $userAToken")
         }
@@ -861,6 +872,17 @@ class PurrRoutesTest {
             header(HttpHeaders.Authorization, "Bearer $token")
         }
         assertEquals(HttpStatusCode.OK, ended.status)
+
+        client.postLiveKitWebhook(
+            """
+                {
+                  "event":"participant_left",
+                  "id":"event-$callId-final-left",
+                  "room":{"name":"pair-demo-$callId","numParticipants":0},
+                  "participant":{"identity":"user-a-$callId","state":"DISCONNECTED","kind":"STANDARD"}
+                }
+            """.trimIndent(),
+        )
 
         val from = sampledAt - 43_200_000L
         val to = sampledAt + 43_200_000L

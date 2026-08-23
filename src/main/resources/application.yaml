@@ -72,6 +72,7 @@ purr:
     leaseSeconds: 3600
     retryBaseSeconds: 5
     retryMaxSeconds: 3600
+    restoreWaitTimeoutMillis: 120000
   avatar:
     bucket: purr-avatars
     endpoint: "http://localhost:9000"

@@ -24,6 +24,7 @@ import life.fxs.purr.server.application.port.RecordingCommandType
 import life.fxs.purr.server.application.port.RecordingCommandWakeup
 import life.fxs.purr.server.application.port.RecordingCommandProcessor
 import life.fxs.purr.server.application.port.RecordingController
+import life.fxs.purr.server.application.port.CallRoomTerminator
 import life.fxs.purr.server.config.OutboxConfig
 import life.fxs.purr.server.model.CallDurationPolicy
 import life.fxs.purr.server.model.CallState
@@ -41,6 +42,7 @@ class RecordingCommandDispatcher(
     private val repository: RecordingCommandStore,
     private val callSessionStore: CallSessionStore,
     private val recordingController: RecordingController,
+    private val roomTerminator: CallRoomTerminator,
     private val nowProvider: () -> Instant = Instant::now,
     private val workerId: String = "recording-command-${UUID.randomUUID()}",
 ) : AutoCloseable, RecordingCommandWakeup, RecordingCommandProcessor {
@@ -168,6 +170,14 @@ class RecordingCommandDispatcher(
                     operationId = command.commandId,
                 )
             }
+            RecordingCommandType.DELETE_ROOM -> {
+                roomTerminator.deleteRoom(command.roomName)
+                ProviderRecordingResult(
+                    status = call.recordingStatus,
+                    recordingId = call.recordingId,
+                    updatedAtEpochMillis = nowEpochMillis,
+                )
+            }
         }
         return result.copy(
             recordingId = result.recordingId ?: command.recordingId,
@@ -204,8 +214,8 @@ class RecordingCommandDispatcher(
             // successful no-op. In particular, no provider request is made.
             return initialCall.toProviderRecordingResult(nowEpochMillis)
         }
-        check(initialCall.state == CallState.ACTIVE) {
-            "Cannot start recording for call ${command.callId} in state ${initialCall.state.wireValue}"
+        if (initialCall.state != CallState.ACTIVE) {
+            return initialCall.toProviderRecordingResult(nowEpochMillis)
         }
 
         val call = when (initialCall.recordingStatus) {
@@ -229,8 +239,8 @@ class RecordingCommandDispatcher(
         if (call.recordingStatus == RecordingStatus.RECORDING) {
             return call.toProviderRecordingResult(nowEpochMillis)
         }
-        check(call.recordingStatus in setOf(RecordingStatus.STARTING, RecordingStatus.STOPPING)) {
-            "Call ${command.callId} is not eligible to start recording"
+        if (call.recordingStatus !in setOf(RecordingStatus.STARTING, RecordingStatus.STOPPING)) {
+            return call.toProviderRecordingResult(nowEpochMillis)
         }
         return recordingController.startRecording(
             callId = command.callId,

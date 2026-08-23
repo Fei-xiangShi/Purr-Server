@@ -91,6 +91,7 @@ data class GoogleDriveConfig(
     val leaseSeconds: Long = 3_600,
     val retryBaseSeconds: Long = 5,
     val retryMaxSeconds: Long = 3_600,
+    val restoreWaitTimeoutMillis: Long = 120_000,
 )
 
 enum class RecordingProvider {

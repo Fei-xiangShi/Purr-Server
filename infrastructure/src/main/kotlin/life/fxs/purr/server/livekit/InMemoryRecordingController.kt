@@ -5,18 +5,20 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import life.fxs.purr.server.application.port.ProviderRecordingResult
 import life.fxs.purr.server.application.port.RecordingController
+import life.fxs.purr.server.application.port.CallRoomTerminator
 import life.fxs.purr.server.config.RecordingConfig
 import life.fxs.purr.server.model.RecordingStatus
 
 class InMemoryRecordingController(
     private val config: RecordingConfig,
     private val nowProvider: () -> Instant = Instant::now,
-) : RecordingController {
+) : RecordingController, CallRoomTerminator {
     private val recordingStarts = ConcurrentHashMap<String, Long>()
     private val recordings = ConcurrentHashMap<String, ProviderRecordingResult>()
     private val operationResults = ConcurrentHashMap<String, ProviderRecordingResult>()
 
-    override fun startRecording(callId: String, roomName: String): ProviderRecordingResult {
+    override fun startRecording(callId: String, roomName: String, operationId: String): ProviderRecordingResult {
+        operationResults[operationId]?.let { return it }
         if (!config.enabled) {
             error("In-memory recording controller cannot be used while recording is disabled")
         }
@@ -29,22 +31,16 @@ class InMemoryRecordingController(
             updatedAtEpochMillis = now,
             objectKey = "${config.filePrefix.trimEnd('/')}/$callId/$now.ogg",
             startedAtEpochMillis = now,
-        ).also { recordings[recordingId] = it }
-    }
-
-    override fun startRecording(
-        callId: String,
-        roomName: String,
-        operationId: String,
-    ): ProviderRecordingResult = operationResults[operationId] ?: startRecording(callId, roomName).also {
-        operationResults[operationId] = it
+        ).also { recordings[recordingId] = it; operationResults[operationId] = it }
     }
 
     override fun stopRecording(
         callId: String,
         roomName: String,
         currentRecordingId: String?,
+        operationId: String,
     ): ProviderRecordingResult {
+        operationResults[operationId]?.let { return it }
         if (!config.enabled) {
             error("In-memory recording controller cannot be used while recording is disabled")
         }
@@ -59,21 +55,13 @@ class InMemoryRecordingController(
             durationMillis = startedAt?.let { now - it },
         ).also { result ->
             currentRecordingId?.let { recordings[it] = result }
+            operationResults[operationId] = result
         }
     }
 
-    override fun stopRecording(
-        callId: String,
-        roomName: String,
-        currentRecordingId: String?,
-        operationId: String,
-    ): ProviderRecordingResult = operationResults[operationId] ?: stopRecording(
-        callId,
-        roomName,
-        currentRecordingId,
-    ).also { operationResults[operationId] = it }
-
     override fun getRecording(recordingId: String): ProviderRecordingResult? = recordings[recordingId]
+
+    override fun deleteRoom(roomName: String) = Unit
 
     override fun findRecordingForOperation(
         callId: String,

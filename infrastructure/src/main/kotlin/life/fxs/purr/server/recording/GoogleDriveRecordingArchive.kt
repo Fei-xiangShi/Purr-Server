@@ -16,10 +16,14 @@ fun interface RecordingArchiveUploader {
     fun upload(recording: RecordingRecord, recordingObject: RecordingObject): String
 }
 
+fun interface RecordingArchiveDownloader {
+    fun download(fileId: String): RecordingObject
+}
+
 class GoogleDriveRecordingArchive internal constructor(
     private val config: GoogleDriveConfig,
     private val gateway: GoogleDriveGateway,
-) : RecordingArchiveUploader, AutoCloseable {
+) : RecordingArchiveUploader, RecordingArchiveDownloader, AutoCloseable {
     constructor(
         config: GoogleDriveConfig,
         credentialsProvider: () -> GoogleCredentials = { loadDriveCredentials(config) },
@@ -35,6 +39,8 @@ class GoogleDriveRecordingArchive internal constructor(
         )
     }
 
+    override fun download(fileId: String): RecordingObject = gateway.download(fileId)
+
     private fun fileName(recording: RecordingRecord): String {
         val original = recording.objectKey
             ?.substringAfterLast('/')
@@ -47,6 +53,8 @@ class GoogleDriveRecordingArchive internal constructor(
 
 internal interface GoogleDriveGateway : AutoCloseable {
     fun find(folderId: String, recordingId: String): String?
+
+    fun download(fileId: String): RecordingObject
 
     fun create(
         folderId: String,
@@ -104,6 +112,21 @@ private class GoogleApiDriveGateway(
             .apply { mediaHttpUploader.isDirectUploadEnabled = false }
             .execute()
             .id
+    }
+
+    override fun download(fileId: String): RecordingObject {
+        val metadata = drive.files().get(fileId)
+            .setSupportsAllDrives(true)
+            .setFields("size,mimeType")
+            .execute()
+        val input = drive.files().get(fileId)
+            .setSupportsAllDrives(true)
+            .executeMediaAsInputStream()
+        return RecordingObject(
+            input = input,
+            contentLength = metadata.size?.toLong(),
+            contentType = metadata.mimeType,
+        )
     }
 }
 

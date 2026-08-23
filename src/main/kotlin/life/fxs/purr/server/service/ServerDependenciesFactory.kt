@@ -13,6 +13,7 @@ import life.fxs.purr.server.application.port.PasswordVerifier
 import life.fxs.purr.server.application.port.PresenceStore
 import life.fxs.purr.server.application.port.RealtimeEventSink
 import life.fxs.purr.server.application.port.RecordingController
+import life.fxs.purr.server.application.port.CallRoomTerminator
 import life.fxs.purr.server.application.port.AvatarTelemetry
 import life.fxs.purr.server.application.port.NoOpAvatarTelemetry
 import life.fxs.purr.server.auth.JwtTokenService
@@ -60,6 +61,7 @@ import life.fxs.purr.server.avatar.S3AvatarObjectStore
 import life.fxs.purr.server.recording.RecordingRetentionService
 import life.fxs.purr.server.recording.GoogleDriveRecordingArchive
 import life.fxs.purr.server.recording.RecordingArchiveWorker
+import life.fxs.purr.server.recording.RestoringRecordingDownloadProvider
 import life.fxs.purr.server.ratelimit.AuthRateLimiter
 import life.fxs.purr.server.ratelimit.AuthRateLimiterFactory
 import life.fxs.purr.server.redis.RedisClientResources
@@ -309,33 +311,52 @@ object ServerDependenciesFactory {
             val pushDeviceService = PushDeviceService(pushDeviceRepository)
             val tokenService = JwtLiveKitTokenService(config.liveKit)
             val recordingAdapters = when (config.recording.provider) {
-                RecordingProvider.LIVEKIT -> RecordingAdapters(
-                    controller = LiveKitEgressRecordingControlService(
+                RecordingProvider.LIVEKIT -> {
+                    val controller = LiveKitEgressRecordingControlService(
                         liveKitConfig = config.liveKit,
                         recordingConfig = config.recording,
-                    ),
-                    participantService = LiveKitRoomParticipantService(config.liveKit),
-                )
-                RecordingProvider.IN_MEMORY -> RecordingAdapters(
-                    controller = InMemoryRecordingController(config.recording),
-                    participantService = null,
-                )
+                    )
+                    RecordingAdapters(
+                        controller = controller,
+                        participantService = LiveKitRoomParticipantService(config.liveKit),
+                        roomTerminator = controller,
+                    )
+                }
+                RecordingProvider.IN_MEMORY -> {
+                    val controller = InMemoryRecordingController(config.recording)
+                    RecordingAdapters(
+                        controller = controller,
+                        participantService = null,
+                        roomTerminator = controller,
+                    )
+                }
             }
             val recordingController = recordingAdapters.controller
+            val roomTerminator = recordingAdapters.roomTerminator
             val commandDispatcher = RecordingCommandDispatcher(
                 config = config.outbox,
                 repository = recordingCommandRepository,
                 callSessionStore = callSessionRepository,
                 recordingController = recordingController,
+                roomTerminator = roomTerminator,
             ).also { it.start() }
             recordingCommandDispatcher = commandDispatcher
-            val recordingDownloadUrlProvider = S3RecordingDownloadUrlProvider(config.recording)
-                .also { recordingDownloadResource = it }
             val recordingObjectStore = S3RecordingObjectStore(config.recording)
                 .also { recordingObjectStoreResource = it }
             val googleDriveArchive = config.googleDrive.enabled.takeIf { it }
                 ?.let { GoogleDriveRecordingArchive(config.googleDrive) }
                 .also { googleDriveResource = it }
+            val recordingDownloadUrlProvider = if (googleDriveArchive != null) {
+                RestoringRecordingDownloadProvider(
+                    config = config.googleDrive,
+                    delegate = S3RecordingDownloadUrlProvider(config.recording),
+                    repository = callRecordingRepository,
+                    objectRestorer = recordingObjectStore,
+                    archiveDownloader = googleDriveArchive,
+                )
+            } else {
+                S3RecordingDownloadUrlProvider(config.recording)
+            }.also { recordingDownloadResource = it }
             val archiveWorker = RecordingArchiveWorker(
                 config = config.googleDrive,
                 repository = callRecordingRepository,
@@ -361,9 +382,7 @@ object ServerDependenciesFactory {
                 callAccessPolicy = callAccessPolicy,
                 pairService = pairService,
                 callSessionStore = callSessionRepository,
-                callRecordingStore = callRecordingRepository,
                 recordingConsentStore = callRecordingConsentRepository,
-                recordingController = null,
                 recordingEnabled = config.recording.enabled,
                 consentPolicyVersion = config.recording.consentPolicyVersion,
                 recordingCommandStore = recordingCommandRepository,
@@ -381,10 +400,8 @@ object ServerDependenciesFactory {
                     ?.let { LiveKitRoomParticipantService(config.liveKit) }
             val callRoomLifecycleService = CallRoomLifecycleService(
                 callSessionStore = callSessionRepository,
-                callRecordingStore = callRecordingRepository,
                 recordingConsentStore = callRecordingConsentRepository,
                 pairStore = pairBondRepository,
-                recordingController = null,
                 callLifecycleService = callLifecycleService,
                 recordingEnabled = config.recording.enabled,
                 consentPolicyVersion = config.recording.consentPolicyVersion,
@@ -393,6 +410,7 @@ object ServerDependenciesFactory {
                 transaction = applicationTransaction,
                 recordingCommandWakeup = commandDispatcher,
                 recordingCommandProcessor = commandDispatcher,
+                roomTerminator = roomTerminator,
             )
             val callSessionService = CallSessionService(
                 pairService = pairService,
@@ -405,16 +423,15 @@ object ServerDependenciesFactory {
                 consentPolicyVersion = config.recording.consentPolicyVersion,
                 transaction = applicationTransaction,
                 realtimeOutbox = outboxRepository,
-                callTerminator = callRoomLifecycleService,
             )
             val callRecordingWebhookService = CallRecordingWebhookService(
                 callSessionStore = callSessionRepository,
                 callRecordingStore = callRecordingRepository,
-                recordingController = null,
                 recordingCommandStore = recordingCommandRepository,
                 transaction = applicationTransaction,
                 recordingCommandWakeup = commandDispatcher,
                 recordingArchiveWakeup = archiveWorker,
+                roomTerminator = roomTerminator,
             )
             val reconciliationWorker = roomParticipantReader?.let { reader ->
                 CallRoomReconciliationWorker(
@@ -427,6 +444,8 @@ object ServerDependenciesFactory {
                         waitingTtlMillis = config.callReconciliation.waitingTtlSeconds * 1_000L,
                         emptyRoomGraceMillis = config.callReconciliation.emptyRoomGraceSeconds * 1_000L,
                         batchSize = config.callReconciliation.batchSize,
+                        roomTerminator = roomTerminator,
+                        recordingCommandStore = recordingCommandRepository,
                     ),
                 ).also { it.start() }
             }
@@ -587,6 +606,7 @@ object ServerDependenciesFactory {
 private data class RecordingAdapters(
     val controller: RecordingController,
     val participantService: RoomParticipantService?,
+    val roomTerminator: CallRoomTerminator,
 )
 
 private const val BCRYPT_LOG_ROUNDS = 12

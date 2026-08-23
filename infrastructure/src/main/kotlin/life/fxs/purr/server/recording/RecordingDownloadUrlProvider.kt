@@ -6,6 +6,7 @@ import java.time.Instant
 import life.fxs.purr.server.application.model.RecordingDownloadResult
 import life.fxs.purr.server.config.RecordingConfig
 import life.fxs.purr.server.application.port.RecordingDownloadProvider
+import life.fxs.purr.server.application.port.RecordingRecord
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider
 import software.amazon.awssdk.regions.Region
@@ -31,7 +32,9 @@ class S3RecordingDownloadUrlProvider(
         )
         .build()
 
-    override fun create(recordingId: String, objectKey: String): RecordingDownloadResult {
+    override fun create(recording: RecordingRecord): RecordingDownloadResult {
+        val recordingId = recording.recordingId
+        val objectKey = recording.objectKey ?: error("Recording object key is required")
         val safeRecordingId = recordingId.replace(UNSAFE_FILENAME_CHARACTERS, "_")
         val getObjectRequest = GetObjectRequest.builder()
             .bucket(config.bucket)

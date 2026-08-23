@@ -2,16 +2,14 @@ package life.fxs.purr.server.application.call
 
 import java.time.Instant
 import life.fxs.purr.server.application.port.CallRecord
-import life.fxs.purr.server.application.port.CallRecordingStore
 import life.fxs.purr.server.application.port.CallRoomEvent
 import life.fxs.purr.server.application.port.CallRoomEventType
 import life.fxs.purr.server.application.port.CallRoomParticipantReader
 import life.fxs.purr.server.application.port.CallSessionStore
 import life.fxs.purr.server.application.port.CallTerminator
+import life.fxs.purr.server.application.port.CallRoomTerminator
 import life.fxs.purr.server.application.port.PairStore
-import life.fxs.purr.server.application.port.ProviderRecordingResult
 import life.fxs.purr.server.application.port.RecordingConsentStore
-import life.fxs.purr.server.application.port.RecordingController
 import life.fxs.purr.server.application.port.RecordingCommandProcessor
 import life.fxs.purr.server.application.port.RecordingCommandStore
 import life.fxs.purr.server.application.port.RecordingCommandWakeup
@@ -32,20 +30,18 @@ import life.fxs.purr.server.model.RecordingStatus
  */
 class CallRoomLifecycleService(
     private val callSessionStore: CallSessionStore,
-    private val callRecordingStore: CallRecordingStore,
     private val recordingConsentStore: RecordingConsentStore,
     private val pairStore: PairStore,
-    /** Legacy immediate adapter retained for source compatibility in tests. */
-    private val recordingController: RecordingController? = null,
     private val callLifecycleService: CallLifecycleService,
     private val recordingEnabled: Boolean,
     private val consentPolicyVersion: String,
     private val participantReader: CallRoomParticipantReader? = null,
     private val nowProvider: () -> Instant = Instant::now,
-    private val recordingCommandStore: RecordingCommandStore? = null,
+    private val recordingCommandStore: RecordingCommandStore,
     private val transaction: ApplicationTransaction = ImmediateCallRoomTransaction,
     private val recordingCommandWakeup: RecordingCommandWakeup? = null,
     private val recordingCommandProcessor: RecordingCommandProcessor? = null,
+    private val roomTerminator: CallRoomTerminator,
 ) : CallRoomEventHandler, CallTerminator {
     override fun handle(event: CallRoomEvent) {
         val call = callSessionStore.findByRoomName(event.roomName) ?: return
@@ -96,10 +92,9 @@ class CallRoomLifecycleService(
             return
         }
 
-        val commandStore = recordingCommandStore ?: return
         val connectedAt = activeCall.connectedAtEpochMillis ?: return
         transaction.execute {
-            commandStore.enqueueStart(
+            recordingCommandStore.enqueueStart(
                 callId = activeCall.callId,
                 roomName = activeCall.roomName,
                 requestedAtEpochMillis = connectedAt,
@@ -141,28 +136,24 @@ class CallRoomLifecycleService(
     private fun participantIdentity(userId: String, callId: String): String = "$userId-$callId"
 
     override fun terminate(callId: String, endedAtEpochMillis: Long) {
+        var roomNameForCleanup: String? = null
         val stopCommandClaimed = transaction.execute {
             val current = callSessionStore.find(callId) ?: return@execute false
+            roomNameForCleanup = current.roomName
             var claimedDurableStop = false
-            if (recordingCommandStore != null) {
-                val stopping = callSessionStore.claimRecordingStop(
-                    callId = current.callId,
-                    recordingId = current.recordingId,
-                    updatedAtEpochMillis = endedAtEpochMillis,
+            val stopping = callSessionStore.claimRecordingStop(
+                callId = current.callId,
+                recordingId = current.recordingId,
+                updatedAtEpochMillis = endedAtEpochMillis,
+            )
+            if (stopping != null) {
+                recordingCommandStore.enqueueStop(
+                    callId = stopping.callId,
+                    roomName = stopping.roomName,
+                    recordingId = stopping.recordingId,
+                    requestedAtEpochMillis = endedAtEpochMillis,
                 )
-                if (stopping != null) {
-                    recordingCommandStore.enqueueStop(
-                        callId = stopping.callId,
-                        roomName = stopping.roomName,
-                        recordingId = stopping.recordingId,
-                        requestedAtEpochMillis = endedAtEpochMillis,
-                    )
-                    claimedDurableStop = true
-                }
-            } else {
-                // Compatibility path for older callers. Production wiring
-                // always supplies the durable command store above.
-                maybeStopRecording(current)
+                claimedDurableStop = true
             }
             callLifecycleService.endOpenCall(
                 callId = current.callId,
@@ -171,6 +162,17 @@ class CallRoomLifecycleService(
             claimedDurableStop
         }
         if (stopCommandClaimed) {
+            drainRecordingCommandsBestEffort()
+            recordingCommandWakeup?.wake()
+        } else {
+            val roomName = roomNameForCleanup ?: return
+            transaction.execute {
+                recordingCommandStore.enqueueRoomDelete(
+                    callId = callId,
+                    roomName = roomName,
+                    requestedAtEpochMillis = endedAtEpochMillis,
+                )
+            }
             drainRecordingCommandsBestEffort()
             recordingCommandWakeup?.wake()
         }
@@ -183,31 +185,6 @@ class CallRoomLifecycleService(
      */
     private fun drainRecordingCommandsBestEffort() {
         runCatching { recordingCommandProcessor?.processPending() }
-    }
-
-    private fun maybeStopRecording(call: CallRecord) {
-        if (call.recordingStatus !in setOf(RecordingStatus.STARTING, RecordingStatus.RECORDING)) return
-        val recordingId = call.recordingId ?: return
-        val controller = recordingController ?: return
-        try {
-            val result = controller.stopRecording(call.callId, call.roomName, recordingId)
-            updateRecording(call.callId, result)
-        } catch (error: Throwable) {
-            updateRecording(
-                call.callId,
-                ProviderRecordingResult(
-                    status = RecordingStatus.FAILED,
-                    recordingId = recordingId,
-                    updatedAtEpochMillis = nowProvider().toEpochMilli(),
-                    errorMessage = error.message,
-                ),
-            )
-        }
-    }
-
-    private fun updateRecording(callId: String, result: ProviderRecordingResult): CallRecord? {
-        if (!callRecordingStore.updateCurrent(callId, result)) return null
-        return callSessionStore.find(callId)
     }
 
     private companion object {

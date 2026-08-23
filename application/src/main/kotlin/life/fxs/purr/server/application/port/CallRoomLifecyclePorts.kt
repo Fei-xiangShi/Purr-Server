@@ -48,6 +48,9 @@ fun interface CallTerminator {
 interface CallRoomReconciliationStore {
     fun findOpenCalls(limit: Int): List<CallRecord>
 
+    /** Ended calls whose provider room may still need background deletion. */
+    fun findEndedCallsForRoomCleanup(limit: Int): List<CallRecord> = emptyList()
+
     fun observeRoomEmpty(callId: String, observedAtEpochMillis: Long): CallRecord?
 
     fun clearRoomEmptyObservation(callId: String): Boolean
@@ -65,15 +68,13 @@ interface CallRoomParticipantReader {
 
     /**
      * Returns the authoritative active identities when the provider can
-     * supply them. A null result means this adapter only supports counts and
-     * keeps source compatibility with count-only test/local adapters.
+     * supply them. A null result means this provider exposes only counts.
      */
     fun activeNonEgressParticipantIdentities(roomName: String): Set<String>? = null
 
     /**
-     * Returns the authoritative present identities when available. As with
-     * active identities, null means that only count-based reconciliation is
-     * supported by the adapter.
+     * Returns the authoritative present identities when available. A null
+     * result means that only count-based reconciliation is available.
      */
     fun presentNonEgressParticipantIdentities(roomName: String): Set<String>? = null
 }

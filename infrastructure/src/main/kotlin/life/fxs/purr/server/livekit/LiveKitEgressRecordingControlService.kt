@@ -11,6 +11,7 @@ import life.fxs.purr.server.application.ApplicationError
 import life.fxs.purr.server.application.ApplicationException
 import life.fxs.purr.server.application.port.ProviderRecordingResult
 import life.fxs.purr.server.application.port.RecordingController
+import life.fxs.purr.server.application.port.CallRoomTerminator
 import life.fxs.purr.server.config.LiveKitConfig
 import life.fxs.purr.server.config.RecordingConfig
 import life.fxs.purr.server.model.RecordingStatus
@@ -21,7 +22,7 @@ class LiveKitEgressRecordingControlService(
     private val liveKitConfig: LiveKitConfig,
     private val recordingConfig: RecordingConfig,
     private val nowProvider: () -> Instant = Instant::now,
-) : RecordingController {
+) : RecordingController, CallRoomTerminator {
     /** Fast-path cache; cross-process reconciliation uses the deterministic output key below. */
     private val operationResults = ConcurrentHashMap<String, ProviderRecordingResult>()
     private val client: EgressServiceClient by lazy {
@@ -37,12 +38,6 @@ class LiveKitEgressRecordingControlService(
             liveKitConfig.apiKey,
             liveKitConfig.apiSecret,
         )
-    }
-
-    override fun startRecording(callId: String, roomName: String): ProviderRecordingResult {
-        val now = nowProvider()
-        val objectKey = buildObjectKey(callId, now)
-        return startRecordingWithObjectKey(roomName, objectKey)
     }
 
     private fun startRecordingWithObjectKey(
@@ -82,7 +77,9 @@ class LiveKitEgressRecordingControlService(
         callId: String,
         roomName: String,
         currentRecordingId: String?,
+        operationId: String,
     ): ProviderRecordingResult {
+        operationResults[operationId]?.let { return it }
         ensureEnabled()
         val recordingId = currentRecordingId
             ?: throw ApplicationException(
@@ -93,19 +90,18 @@ class LiveKitEgressRecordingControlService(
             .executeOrThrow("stop recording")
         return response.toRecordingResult().let { result ->
             if (result.recordingId == null) result.copy(recordingId = recordingId) else result
-        }
+        }.also { operationResults[operationId] = it }
     }
 
-    override fun stopRecording(
-        callId: String,
-        roomName: String,
-        currentRecordingId: String?,
-        operationId: String,
-    ): ProviderRecordingResult = operationResults[operationId] ?: stopRecording(
-        callId,
-        roomName,
-        currentRecordingId,
-    ).also { operationResults[operationId] = it }
+    override fun deleteRoom(roomName: String) {
+        val response = roomClient.deleteRoom(roomName).execute()
+        if (!response.isSuccessful && response.code() != 404) {
+            throw ApplicationException(
+                ApplicationError.EXTERNAL_DEPENDENCY,
+                "LiveKit failed to delete room $roomName: ${response.code()} ${response.message()}",
+            )
+        }
+    }
 
     override fun getRecording(recordingId: String): ProviderRecordingResult? {
         ensureEnabled()

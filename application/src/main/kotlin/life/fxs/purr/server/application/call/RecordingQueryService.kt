@@ -28,20 +28,20 @@ class RecordingQueryService(
         val recording = callRecordingStore.findByRecordingId(recordingId)
             ?.takeIf { it.callId == callId }
             ?: throw ApplicationException(ApplicationError.NOT_FOUND, "Recording not found: $recordingId")
-        if (recording.status != RecordingStatus.STOPPED || recording.objectKey.isNullOrBlank()) {
+        if (!recordingDownloadProvider.isAvailable(recording)) {
             throw ApplicationException(
                 ApplicationError.CONFLICT,
                 "Recording is not ready for download: $recordingId",
             )
         }
-        return recordingDownloadProvider.create(recordingId, recording.objectKey)
+        return recordingDownloadProvider.create(recording)
     }
 
     private fun RecordingRecord.toResult() = CallRecordingResult(
         recordingId = recordingId,
         callId = callId,
         status = status,
-        downloadAvailable = status == RecordingStatus.STOPPED && !objectKey.isNullOrBlank(),
+        downloadAvailable = recordingDownloadProvider.isAvailable(this),
         startedAtEpochMillis = startedAtEpochMillis,
         endedAtEpochMillis = endedAtEpochMillis,
         durationMillis = durationMillis,

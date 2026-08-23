@@ -19,6 +19,12 @@ fun interface RecordingObjectReader {
     fun open(objectKey: String): RecordingObject
 }
 
+interface RecordingObjectRestorer {
+    fun exists(objectKey: String): Boolean
+
+    fun put(objectKey: String, recordingObject: RecordingObject)
+}
+
 class RecordingObject(
     val input: InputStream,
     val contentLength: Long?,
@@ -29,7 +35,7 @@ class RecordingObject(
 
 class S3RecordingObjectStore(
     private val config: RecordingConfig,
-) : RecordingObjectStore, RecordingObjectReader, AutoCloseable {
+) : RecordingObjectStore, RecordingObjectReader, RecordingObjectRestorer, AutoCloseable {
     private val client = S3Client.builder()
         .endpointOverride(URI.create(config.endpoint))
         .region(Region.of(config.region))
@@ -66,7 +72,38 @@ class S3RecordingObjectStore(
         )
     }
 
+    override fun exists(objectKey: String): Boolean = try {
+        client.headObject(
+            software.amazon.awssdk.services.s3.model.HeadObjectRequest.builder()
+                .bucket(config.bucket)
+                .key(objectKey)
+                .build(),
+        )
+        true
+    } catch (error: software.amazon.awssdk.services.s3.model.NoSuchKeyException) {
+        false
+    } catch (error: software.amazon.awssdk.services.s3.model.S3Exception) {
+        if (error.statusCode() == 404) false else throw error
+    }
+
+    override fun put(objectKey: String, recordingObject: RecordingObject) {
+        val length = recordingObject.contentLength
+            ?: error("Recording restore requires a known content length")
+        client.putObject(
+            software.amazon.awssdk.services.s3.model.PutObjectRequest.builder()
+                .bucket(config.bucket)
+                .key(objectKey)
+                .contentType(recordingObject.contentType ?: RECORDING_CONTENT_TYPE)
+                .build(),
+            software.amazon.awssdk.core.sync.RequestBody.fromInputStream(recordingObject.input, length),
+        )
+    }
+
     override fun close() {
         client.close()
+    }
+
+    private companion object {
+        const val RECORDING_CONTENT_TYPE = "audio/ogg"
     }
 }

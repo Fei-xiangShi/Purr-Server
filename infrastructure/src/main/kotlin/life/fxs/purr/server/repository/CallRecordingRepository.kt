@@ -6,6 +6,7 @@ import life.fxs.purr.server.application.port.RecordingRecord
 import life.fxs.purr.server.db.table.CallRecordingsTable
 import life.fxs.purr.server.db.table.CallSessionsTable
 import life.fxs.purr.server.model.RecordingStatus
+import life.fxs.purr.server.recording.RecordingRestoreStore
 import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SortOrder
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
@@ -21,7 +22,7 @@ import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
 
-class CallRecordingRepository : CallRecordingStore {
+class CallRecordingRepository : CallRecordingStore, RecordingRestoreStore {
     override fun updateCurrent(callId: String, result: ProviderRecordingResult): Boolean = transaction {
         val call = CallSessionsTable.selectAll()
             .where { CallSessionsTable.callId eq callId }
@@ -247,6 +248,76 @@ class CallRecordingRepository : CallRecordingStore {
             } == 1
     }
 
+    override fun claimRestore(
+        recordingId: String,
+        workerId: String,
+        nowEpochMillis: Long,
+        leaseUntilEpochMillis: Long,
+    ): RecordingRecord? = transaction {
+        val updated = CallRecordingsTable.update({
+            (CallRecordingsTable.recordingId eq recordingId) and
+                CallRecordingsTable.driveFileId.isNotNull() and
+                (
+                    (CallRecordingsTable.recordingStatus eq RecordingStatus.DELETED.wireValue) or
+                        (CallRecordingsTable.recordingStatus eq RecordingStatus.STOPPED.wireValue)
+                    ) and
+                (
+                    CallRecordingsTable.deletionLeaseUntilEpochMillis.isNull() or
+                        (CallRecordingsTable.deletionLeaseUntilEpochMillis less nowEpochMillis)
+                    ) and
+                (
+                    CallRecordingsTable.restoreLeaseUntilEpochMillis.isNull() or
+                        (CallRecordingsTable.restoreLeaseUntilEpochMillis less nowEpochMillis)
+                    )
+        }) {
+            it[restoreAttempts] = restoreAttempts + 1
+            it[restoreLeaseOwner] = workerId
+            it[restoreLeaseUntilEpochMillis] = leaseUntilEpochMillis
+            it[restoreErrorMessage] = null
+        }
+        if (updated != 1) return@transaction null
+        CallRecordingsTable.selectAll()
+            .where { CallRecordingsTable.recordingId eq recordingId }
+            .single()
+            .toRecordingRecord()
+    }
+
+    override fun markRestored(
+        recordingId: String,
+        workerId: String,
+        objectKey: String,
+        restoredAtEpochMillis: Long,
+        sizeBytes: Long?,
+    ): Boolean = transaction {
+        CallRecordingsTable.update({
+            (CallRecordingsTable.recordingId eq recordingId) and
+                (CallRecordingsTable.restoreLeaseOwner eq workerId)
+        }) {
+            it[recordingStatus] = RecordingStatus.STOPPED.wireValue
+            it[CallRecordingsTable.objectKey] = objectKey
+            it[CallRecordingsTable.deletedAtEpochMillis] = null
+            it[deletionErrorMessage] = null
+            it[deletionLeaseOwner] = null
+            it[deletionLeaseUntilEpochMillis] = null
+            it[lastDeletionAttemptAtEpochMillis] = restoredAtEpochMillis
+            if (sizeBytes != null) it[CallRecordingsTable.sizeBytes] = sizeBytes
+            it[restoreLeaseOwner] = null
+            it[restoreLeaseUntilEpochMillis] = null
+            it[restoreErrorMessage] = null
+        } == 1
+    }
+
+    override fun recordRestoreFailure(recordingId: String, workerId: String, message: String): Boolean = transaction {
+        CallRecordingsTable.update({
+            (CallRecordingsTable.recordingId eq recordingId) and
+                (CallRecordingsTable.restoreLeaseOwner eq workerId)
+        }) {
+            it[restoreErrorMessage] = message.take(MAX_RECORDING_ERROR_LENGTH)
+            it[restoreLeaseOwner] = null
+            it[restoreLeaseUntilEpochMillis] = null
+        } == 1
+    }
+
     private fun upsertInCurrentTransaction(
         callId: String,
         recordingId: String,
@@ -281,6 +352,10 @@ class CallRecordingRepository : CallRecordingStore {
             it[driveUploadLeaseOwner] = null
             it[driveUploadLeaseUntilEpochMillis] = null
             it[driveUploadErrorMessage] = null
+            it[restoreAttempts] = 0
+            it[restoreLeaseOwner] = null
+            it[restoreLeaseUntilEpochMillis] = null
+            it[restoreErrorMessage] = null
         }
 
         val existing = CallRecordingsTable.selectAll()
@@ -338,6 +413,10 @@ class CallRecordingRepository : CallRecordingStore {
         driveUploadLeaseOwner = this[CallRecordingsTable.driveUploadLeaseOwner],
         driveUploadLeaseUntilEpochMillis = this[CallRecordingsTable.driveUploadLeaseUntilEpochMillis],
         driveUploadErrorMessage = this[CallRecordingsTable.driveUploadErrorMessage],
+        restoreAttempts = this[CallRecordingsTable.restoreAttempts],
+        restoreLeaseOwner = this[CallRecordingsTable.restoreLeaseOwner],
+        restoreLeaseUntilEpochMillis = this[CallRecordingsTable.restoreLeaseUntilEpochMillis],
+        restoreErrorMessage = this[CallRecordingsTable.restoreErrorMessage],
     )
 }
 

@@ -13,6 +13,9 @@ import life.fxs.purr.server.application.call.CallRoomReconciliationService
 import life.fxs.purr.server.application.call.CallSessionService
 import life.fxs.purr.server.application.model.CreateCallSessionCommand
 import life.fxs.purr.server.application.port.CallRecord
+import life.fxs.purr.server.application.port.CallRoomEvent
+import life.fxs.purr.server.application.port.CallRoomEventType
+import life.fxs.purr.server.application.port.CallRoomParticipant
 import life.fxs.purr.server.application.port.CallRoomParticipantReader
 import life.fxs.purr.server.application.port.MediaTokenIssuer
 import life.fxs.purr.server.application.port.RealtimeEvent
@@ -32,7 +35,7 @@ import life.fxs.purr.server.repository.UserRepository
 
 class CallRoomReconciliationIntegrationTest {
     @Test
-    fun `explicit active call termination is durable idempotent and releases pair for a new call`() {
+    fun `explicit local hangup leaves shared call open until room is empty`() {
         val resources = DatabaseFactory(
             DatabaseConfig(
                 jdbcUrl = "jdbc:h2:mem:explicit-call-end-${System.nanoTime()};MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
@@ -60,15 +63,15 @@ class CallRoomReconciliationIntegrationTest {
             )
             val roomLifecycle = CallRoomLifecycleService(
                 callSessionStore = calls,
-                callRecordingStore = recordings,
                 recordingConsentStore = NoConsentNeeded,
                 pairStore = pairStore,
-                recordingController = null,
                 callLifecycleService = lifecycle,
                 recordingEnabled = true,
                 consentPolicyVersion = "test-v1",
                 recordingCommandStore = commands,
                 transaction = resources.applicationTransaction,
+                nowProvider = { Instant.ofEpochMilli(2_000L) },
+                roomTerminator = NoOpRoomTerminator,
             )
             val callSessionService = CallSessionService(
                 pairService = pairService,
@@ -81,13 +84,29 @@ class CallRoomReconciliationIntegrationTest {
                 consentPolicyVersion = "test-v1",
                 transaction = resources.applicationTransaction,
                 realtimeOutbox = RealtimeOutbox { userId, event, _ -> notifications += userId to event },
-                callTerminator = roomLifecycle,
                 nowProvider = { Instant.ofEpochMilli(2_000L) },
                 callIdProvider = { "call-2" },
             )
 
             callSessionService.endCall("user-a", CALL_ID)
             callSessionService.endCall("user-a", CALL_ID)
+
+            val stillOpen = assertNotNull(calls.find(CALL_ID))
+            assertEquals(CallState.ACTIVE, stillOpen.state)
+            assertEquals(null, stillOpen.endedAtEpochMillis)
+            assertEquals(RecordingStatus.RECORDING, stillOpen.recordingStatus)
+            assertEquals(null, commands.findOpenForCall(CALL_ID, RecordingCommandType.STOP))
+            assertEquals(0, notifications.count { it.second.type == RealtimeEvent.CALL_ENDED })
+
+            roomLifecycle.handle(
+                CallRoomEvent(
+                    eventId = "participant-left-final",
+                    type = CallRoomEventType.PARTICIPANT_LEFT,
+                    roomName = activeRecordingCall().roomName,
+                    participant = CallRoomParticipant(isActive = false, isEgress = false, identity = "user-b-$CALL_ID"),
+                    reportedParticipantCount = 0,
+                ),
+            )
 
             val ended = assertNotNull(calls.find(CALL_ID))
             assertEquals(CallState.ENDED, ended.state)
@@ -143,10 +162,8 @@ class CallRoomReconciliationIntegrationTest {
             val participantReader = EmptyRoomReader
             val roomLifecycle = CallRoomLifecycleService(
                 callSessionStore = calls,
-                callRecordingStore = recordings,
                 recordingConsentStore = NoConsentNeeded,
                 pairStore = PairBondRepository(),
-                recordingController = null,
                 callLifecycleService = lifecycle,
                 recordingEnabled = true,
                 consentPolicyVersion = "test-v1",
@@ -154,6 +171,7 @@ class CallRoomReconciliationIntegrationTest {
                 recordingCommandStore = commands,
                 transaction = resources.applicationTransaction,
                 nowProvider = { Instant.ofEpochMilli(now) },
+                roomTerminator = NoOpRoomTerminator,
             )
             val reconciler = CallRoomReconciliationService(
                 store = calls,
@@ -163,6 +181,8 @@ class CallRoomReconciliationIntegrationTest {
                 waitingTtlMillis = 1_000L,
                 emptyRoomGraceMillis = 100L,
                 batchSize = 10,
+                roomTerminator = NoOpRoomTerminator,
+                recordingCommandStore = commands,
             )
 
             reconciler.reconcileOnce(now)
@@ -207,6 +227,10 @@ class CallRoomReconciliationIntegrationTest {
         override fun countActiveNonEgressParticipants(roomName: String): Int = 0
         override fun countPresentNonEgressParticipants(roomName: String): Int = 0
         override fun presentNonEgressParticipantIdentities(roomName: String): Set<String> = emptySet()
+    }
+
+    private object NoOpRoomTerminator : life.fxs.purr.server.application.port.CallRoomTerminator {
+        override fun deleteRoom(roomName: String) = Unit
     }
 
     private object NoConsentNeeded : RecordingConsentStore {

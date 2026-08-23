@@ -110,7 +110,12 @@ class RecordingRecoveryService(
         if (call.state == CallState.ENDED &&
             providerState.status in setOf(RecordingStatus.STARTING, RecordingStatus.RECORDING)
         ) {
-            val stopped = recordingController.stopRecording(call.callId, call.roomName, recordingId)
+            val stopped = recordingController.stopRecording(
+                callId = call.callId,
+                roomName = call.roomName,
+                currentRecordingId = recordingId,
+                operationId = "recovery-stop:${call.callId}:${call.recordingRecoveryAttempts}",
+            )
             callRecordingRepository.updateCurrent(call.callId, stopped)
             return RecoveryOutcome.RECOVERED
         }

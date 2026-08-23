@@ -108,9 +108,13 @@ class RealtimeRoutesTest {
                 header(HttpHeaders.Authorization, "Bearer $userAToken")
             }
             assertEquals(HttpStatusCode.OK, ended.status)
-            val callEnded = withTimeout(EVENT_TIMEOUT_MILLIS) { eventsForB.receive() }
-            assertTrue(callEnded.contains("\"type\":\"call_ended\""))
-            assertTrue(callEnded.contains("\"callId\":\"$callId\""))
+            // A local hang-up must not end the shared call while B is still
+            // connected. The room-empty webhook is the terminal transition.
+            val stillActive = realtimeClient.get("/calls/active") {
+                header(HttpHeaders.Authorization, "Bearer $userBToken")
+            }
+            assertEquals(HttpStatusCode.OK, stillActive.status)
+            assertTrue(stillActive.bodyAsText().contains("\"callId\":\"$callId\""))
 
             aJob.cancelAndJoin()
             bJob.join()
@@ -131,7 +135,7 @@ class RealtimeRoutesTest {
     }
 
     private companion object {
-        const val EXPECTED_B_EVENT_COUNT = 4
+        const val EXPECTED_B_EVENT_COUNT = 3
         const val EVENT_TIMEOUT_MILLIS = 10_000L
     }
 }

@@ -5,10 +5,10 @@ import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.application.port.CallRecordingStore
 import life.fxs.purr.server.application.port.CallSessionStore
 import life.fxs.purr.server.application.port.ProviderRecordingResult
-import life.fxs.purr.server.application.port.RecordingController
 import life.fxs.purr.server.application.port.RecordingCommandStore
 import life.fxs.purr.server.application.port.RecordingCommandWakeup
 import life.fxs.purr.server.application.port.RecordingArchiveWakeup
+import life.fxs.purr.server.application.port.CallRoomTerminator
 import life.fxs.purr.server.application.port.ApplicationTransaction
 import life.fxs.purr.server.model.CallState
 import life.fxs.purr.server.model.RecordingStatus
@@ -21,13 +21,12 @@ import life.fxs.purr.server.model.RecordingStatus
 class CallRecordingWebhookService(
     private val callSessionStore: CallSessionStore,
     private val callRecordingStore: CallRecordingStore,
-    /** Legacy immediate adapter retained for old embedding callers. */
-    private val recordingController: RecordingController? = null,
     private val nowProvider: () -> Instant = Instant::now,
-    private val recordingCommandStore: RecordingCommandStore? = null,
+    private val recordingCommandStore: RecordingCommandStore,
     private val transaction: ApplicationTransaction = ImmediateRecordingWebhookTransaction,
     private val recordingCommandWakeup: RecordingCommandWakeup? = null,
     private val recordingArchiveWakeup: RecordingArchiveWakeup? = null,
+    private val roomTerminator: CallRoomTerminator,
 ) {
     fun handle(recordingId: String, result: ProviderRecordingResult) {
         if (recordingId.isBlank()) return
@@ -39,6 +38,19 @@ class CallRecordingWebhookService(
         if (result.status == RecordingStatus.STOPPED && updated != null) {
             recordingArchiveWakeup?.wake()
         }
+        if (updated != null &&
+            updated.state == CallState.ENDED &&
+            updated.recordingStatus in setOf(RecordingStatus.STOPPED, RecordingStatus.FAILED)
+        ) {
+            transaction.execute {
+                recordingCommandStore.enqueueRoomDelete(
+                    callId = updated.callId,
+                    roomName = updated.roomName,
+                    requestedAtEpochMillis = nowProvider().toEpochMilli(),
+                )
+            }
+            recordingCommandWakeup?.wake()
+        }
         maybeStopEndedCallRecording(updated)
     }
 
@@ -46,47 +58,23 @@ class CallRecordingWebhookService(
         val storedCall = call ?: return
         if (storedCall.state != CallState.ENDED) return
         if (storedCall.recordingStatus !in setOf(RecordingStatus.STARTING, RecordingStatus.RECORDING)) return
-        if (recordingCommandStore != null) {
-            val requestedAt = nowProvider().toEpochMilli()
-            transaction.execute {
-                val stopping = callSessionStore.claimRecordingStop(
-                    callId = storedCall.callId,
-                    recordingId = storedCall.recordingId,
-                    updatedAtEpochMillis = requestedAt,
+        val requestedAt = nowProvider().toEpochMilli()
+        transaction.execute {
+            val stopping = callSessionStore.claimRecordingStop(
+                callId = storedCall.callId,
+                recordingId = storedCall.recordingId,
+                updatedAtEpochMillis = requestedAt,
+            )
+            if (stopping != null) {
+                recordingCommandStore.enqueueStop(
+                    callId = stopping.callId,
+                    roomName = stopping.roomName,
+                    recordingId = stopping.recordingId,
+                    requestedAtEpochMillis = requestedAt,
                 )
-                if (stopping != null) {
-                    recordingCommandStore.enqueueStop(
-                        callId = stopping.callId,
-                        roomName = stopping.roomName,
-                        recordingId = stopping.recordingId,
-                        requestedAtEpochMillis = requestedAt,
-                    )
-                }
             }
-            recordingCommandWakeup?.wake()
-            return
         }
-
-        val currentRecordingId = storedCall.recordingId ?: return
-        val controller = recordingController ?: return
-        try {
-            val result = controller.stopRecording(
-                storedCall.callId,
-                storedCall.roomName,
-                currentRecordingId,
-            )
-            updateRecording(storedCall.callId, result)
-        } catch (error: Throwable) {
-            updateRecording(
-                storedCall.callId,
-                ProviderRecordingResult(
-                    status = RecordingStatus.FAILED,
-                    recordingId = currentRecordingId,
-                    updatedAtEpochMillis = nowProvider().toEpochMilli(),
-                    errorMessage = error.message,
-                ),
-            )
-        }
+        recordingCommandWakeup?.wake()
     }
 
     private fun updateRecording(callId: String, result: ProviderRecordingResult): CallRecord? {

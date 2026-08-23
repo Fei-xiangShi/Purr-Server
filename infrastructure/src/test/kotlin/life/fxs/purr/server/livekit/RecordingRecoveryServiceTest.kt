@@ -178,12 +178,13 @@ private class RecoveryRecordingControl(
 ) : RecordingController {
     val stopCalls = mutableListOf<String>()
 
-    override fun startRecording(callId: String, roomName: String): ProviderRecordingResult = error("Not used")
+    override fun startRecording(callId: String, roomName: String, operationId: String): ProviderRecordingResult = error("Not used")
 
     override fun stopRecording(
         callId: String,
         roomName: String,
         currentRecordingId: String?,
+        operationId: String,
     ): ProviderRecordingResult {
         stopCalls += currentRecordingId ?: error("Missing recording id")
         return stopResult

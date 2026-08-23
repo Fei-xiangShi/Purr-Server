@@ -86,6 +86,9 @@ class GoogleDriveRecordingArchiveTest {
             return existingFileId
         }
 
+        override fun download(fileId: String): RecordingObject =
+            RecordingObject(ByteArrayInputStream(AUDIO), AUDIO.size.toLong(), "audio/ogg")
+
         override fun create(
             folderId: String,
             recordingId: String,

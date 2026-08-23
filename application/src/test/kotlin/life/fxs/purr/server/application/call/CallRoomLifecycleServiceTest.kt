@@ -144,8 +144,8 @@ class CallRoomLifecycleServiceTest {
         harness.service.handle(event)
 
         assertEquals(CallState.ENDED, harness.calls.call.state)
-        assertEquals(RecordingStatus.STOPPED, harness.calls.call.recordingStatus)
-        assertEquals(1, harness.recordingController.stopCalls)
+        assertEquals(RecordingStatus.STOPPING, harness.calls.call.recordingStatus)
+        assertEquals(1, harness.recordingCommands.stops.size)
         assertEquals(1, harness.calls.endTransitions)
         assertEquals(setOf("user-a", "user-b"), harness.outbox.map { it.first }.toSet())
         assertEquals(2, harness.outbox.size)
@@ -168,8 +168,8 @@ class CallRoomLifecycleServiceTest {
 
         assertEquals(CallState.ENDED, harness.calls.call.state)
         assertEquals(NOW.toEpochMilli(), harness.calls.call.endedAtEpochMillis)
-        assertEquals(RecordingStatus.STOPPED, harness.calls.call.recordingStatus)
-        assertEquals(1, harness.recordingController.stopCalls)
+        assertEquals(RecordingStatus.STOPPING, harness.calls.call.recordingStatus)
+        assertEquals(1, harness.recordingCommands.stops.size)
         assertEquals(1, harness.calls.endTransitions)
         assertEquals(setOf("user-a", "user-b"), harness.outbox.map { it.first }.toSet())
         assertEquals(2, harness.outbox.size)
@@ -248,16 +248,15 @@ class CallRoomLifecycleServiceTest {
         )
         val service = CallRoomLifecycleService(
             callSessionStore = calls,
-            callRecordingStore = recordings,
             recordingConsentStore = AlwaysConsented,
             pairStore = pairStore,
-            recordingController = recordingController,
             callLifecycleService = lifecycle,
             recordingEnabled = true,
             consentPolicyVersion = "test-v1",
             participantReader = participantReader,
             nowProvider = { NOW },
-            recordingCommandStore = recordingCommands.takeIf { durableCommands },
+            recordingCommandStore = recordingCommands,
+            roomTerminator = NoOpRoomTerminator,
         )
         return LifecycleHarness(service, calls, recordingController, recordingCommands, outbox)
     }
@@ -281,6 +280,7 @@ class CallRoomLifecycleServiceTest {
 
 private class FakeRecordingCommandStore : RecordingCommandStore {
     val starts = mutableListOf<RecordingCommandRecord>()
+    val stops = mutableListOf<RecordingCommandRecord>()
 
     override fun enqueueStart(
         callId: String,
@@ -309,7 +309,43 @@ private class FakeRecordingCommandStore : RecordingCommandStore {
         roomName: String,
         recordingId: String?,
         requestedAtEpochMillis: Long,
-    ): RecordingCommandRecord = error("Not used")
+    ): RecordingCommandRecord = stops.firstOrNull { it.callId == callId } ?: RecordingCommandRecord(
+        commandId = "stop-$callId",
+        idempotencyKey = "stop:$callId",
+        callId = callId,
+        roomName = roomName,
+        type = RecordingCommandType.STOP,
+        recordingId = recordingId,
+        requestedAtEpochMillis = requestedAtEpochMillis,
+        availableAtEpochMillis = requestedAtEpochMillis,
+        attemptCount = 0,
+        leaseOwner = null,
+        leaseUntilEpochMillis = null,
+        state = RecordingCommandState.PENDING,
+        completedAtEpochMillis = null,
+        lastError = null,
+    ).also(stops::add)
+
+    override fun enqueueRoomDelete(
+        callId: String,
+        roomName: String,
+        requestedAtEpochMillis: Long,
+    ): RecordingCommandRecord = RecordingCommandRecord(
+        commandId = "delete-room-$callId",
+        idempotencyKey = "delete-room:$callId",
+        callId = callId,
+        roomName = roomName,
+        type = RecordingCommandType.DELETE_ROOM,
+        recordingId = null,
+        requestedAtEpochMillis = requestedAtEpochMillis,
+        availableAtEpochMillis = requestedAtEpochMillis,
+        attemptCount = 0,
+        leaseOwner = null,
+        leaseUntilEpochMillis = null,
+        state = RecordingCommandState.PENDING,
+        completedAtEpochMillis = null,
+        lastError = null,
+    )
 
     override fun claimBatch(
         workerId: String,
@@ -355,6 +391,8 @@ class CallRecordingWebhookServiceTest {
         val service = CallRecordingWebhookService(
             callSessionStore = calls,
             callRecordingStore = FakeRecordingStore(calls),
+            recordingCommandStore = FakeRecordingCommandStore(),
+            roomTerminator = NoOpRoomTerminator,
             recordingArchiveWakeup = RecordingArchiveWakeup { wakeups++ },
         )
 
@@ -384,10 +422,12 @@ class CallRecordingWebhookServiceTest {
         )
         val recordings = FakeRecordingStore(calls)
         val controller = FakeRecordingController()
+        val commandStore = FakeRecordingCommandStore()
         val service = CallRecordingWebhookService(
             callSessionStore = calls,
             callRecordingStore = recordings,
-            recordingController = controller,
+            recordingCommandStore = commandStore,
+            roomTerminator = NoOpRoomTerminator,
             nowProvider = { NOW },
         )
         val callback = ProviderRecordingResult(
@@ -399,8 +439,8 @@ class CallRecordingWebhookServiceTest {
         service.handle("recording-1", callback)
         service.handle("recording-1", callback)
 
-        assertEquals(1, controller.stopCalls)
-        assertEquals(RecordingStatus.STOPPED, calls.call.recordingStatus)
+        assertEquals(1, commandStore.stops.size)
+        assertEquals(RecordingStatus.STOPPING, calls.call.recordingStatus)
     }
 }
 
@@ -464,6 +504,18 @@ private class MutableCallStore(initialCall: CallRecord) : CallSessionStore {
         return call
     }
 
+    override fun claimRecordingStop(
+        callId: String,
+        recordingId: String?,
+        updatedAtEpochMillis: Long,
+    ): CallRecord? {
+        if (call.callId != callId || call.recordingStatus !in setOf(RecordingStatus.STARTING, RecordingStatus.RECORDING)) {
+            return null
+        }
+        call = call.copy(recordingStatus = RecordingStatus.STOPPING, updatedAtEpochMillis = updatedAtEpochMillis)
+        return call
+    }
+
     override fun findEndedByPairId(
         pairId: String,
         limit: Int,
@@ -502,7 +554,7 @@ private class FakeRecordingController : RecordingController {
     var startCalls: Int = 0
     var stopCalls: Int = 0
 
-    override fun startRecording(callId: String, roomName: String): ProviderRecordingResult {
+    override fun startRecording(callId: String, roomName: String, operationId: String): ProviderRecordingResult {
         startCalls++
         return ProviderRecordingResult(
             status = RecordingStatus.RECORDING,
@@ -516,6 +568,7 @@ private class FakeRecordingController : RecordingController {
         callId: String,
         roomName: String,
         currentRecordingId: String?,
+        operationId: String,
     ): ProviderRecordingResult {
         stopCalls++
         return ProviderRecordingResult(
@@ -525,6 +578,10 @@ private class FakeRecordingController : RecordingController {
             endedAtEpochMillis = NOW.plusMillis(2).toEpochMilli(),
         )
     }
+}
+
+private object NoOpRoomTerminator : life.fxs.purr.server.application.port.CallRoomTerminator {
+    override fun deleteRoom(roomName: String) = Unit
 }
 
 private object FakePairStore : PairStore {

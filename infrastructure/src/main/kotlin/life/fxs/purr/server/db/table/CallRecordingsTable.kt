@@ -29,6 +29,10 @@ object CallRecordingsTable : Table("call_recordings") {
     val driveUploadLeaseOwner = varchar("drive_upload_lease_owner", 128).nullable()
     val driveUploadLeaseUntilEpochMillis = long("drive_upload_lease_until_epoch_millis").nullable()
     val driveUploadErrorMessage = varchar("drive_upload_error_message", 2048).nullable()
+    val restoreAttempts = integer("restore_attempts").default(0)
+    val restoreLeaseOwner = varchar("restore_lease_owner", 128).nullable()
+    val restoreLeaseUntilEpochMillis = long("restore_lease_until_epoch_millis").nullable()
+    val restoreErrorMessage = varchar("restore_error_message", 2048).nullable()
 
     override val primaryKey = PrimaryKey(recordingId)
 }
