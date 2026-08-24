@@ -131,7 +131,11 @@ services:
           port_range_start: 50000
           port_range_end: 50100
           tcp_port: 7881
-          use_external_ip: false
+          # Tencent Cloud exposes a public address through the host/NAT
+          # boundary; advertise the externally reachable candidate instead of
+          # the container address. Without this, signaling succeeds but media
+          # ICE candidates can point at an unreachable private interface.
+          use_external_ip: true
         keys:
           ${LIVEKIT_API_KEY:?LIVEKIT_API_KEY is required}: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET is required}
         webhook:

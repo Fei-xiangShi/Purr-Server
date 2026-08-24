@@ -123,6 +123,24 @@ class CallRoomLifecycleServiceTest {
     }
 
     @Test
+    fun `empty identity snapshot may use webhook participant count during join race`() {
+        val harness = harness(
+            waitingCall(),
+            participantReader = object : CallRoomParticipantReader {
+                override fun countActiveNonEgressParticipants(roomName: String): Int = 0
+
+                override fun countPresentNonEgressParticipants(roomName: String): Int = 0
+
+                override fun activeNonEgressParticipantIdentities(roomName: String): Set<String> = emptySet()
+            },
+        )
+
+        harness.service.handle(joinedEvent(reportedParticipantCount = 2))
+
+        assertEquals(CallState.ACTIVE, harness.calls.call.state)
+    }
+
+    @Test
     fun `empty room stops recording and ends call once across duplicate events`() {
         val harness = harness(
             waitingCall().copy(
@@ -222,6 +240,36 @@ class CallRoomLifecycleServiceTest {
                 roomName = ROOM_NAME,
                 participant = CallRoomParticipant(isActive = false, isEgress = false),
                 reportedParticipantCount = 0,
+            ),
+        )
+
+        assertEquals(CallState.ACTIVE, harness.calls.call.state)
+        assertEquals(0, harness.calls.endTransitions)
+    }
+
+    @Test
+    fun `webhook participant count prevents stale empty reader from ending call`() {
+        val harness = harness(
+            waitingCall().copy(
+                state = CallState.ACTIVE,
+                connectedAtEpochMillis = NOW.minusSeconds(10).toEpochMilli(),
+            ),
+            participantReader = object : CallRoomParticipantReader {
+                override fun countActiveNonEgressParticipants(roomName: String): Int = 0
+
+                override fun countPresentNonEgressParticipants(roomName: String): Int = 0
+
+                override fun presentNonEgressParticipantIdentities(roomName: String): Set<String> = emptySet()
+            },
+        )
+
+        harness.service.handle(
+            CallRoomEvent(
+                eventId = "stale-empty-reader",
+                type = CallRoomEventType.PARTICIPANT_LEFT,
+                roomName = ROOM_NAME,
+                participant = CallRoomParticipant(isActive = false, isEgress = false),
+                reportedParticipantCount = 1,
             ),
         )
 

@@ -67,10 +67,18 @@ class CallRoomLifecycleService(
             participantIdentity(pair.userBId, call.callId),
         )
         val activeIdentities = participantReader?.activeNonEgressParticipantIdentities(call.roomName)
-        if (activeIdentities != null && !activeIdentities.containsAll(expectedIdentities)) return
+        // A webhook can arrive before LiveKit's participant snapshot is
+        // populated. An empty identity snapshot is not proof of an invalid
+        // room; a non-empty snapshot that omits an expected identity is.
+        if (activeIdentities != null && activeIdentities.isNotEmpty() &&
+            !activeIdentities.containsAll(expectedIdentities)
+        ) return
 
-        val activeParticipantCount = participantReader
-            ?.countActiveNonEgressParticipants(call.roomName)
+        val readerActiveCount = participantReader?.countActiveNonEgressParticipants(call.roomName)
+        // Prefer a positive provider observation. During the empty-snapshot
+        // race, fall back to the count carried by the webhook.
+        val activeParticipantCount = readerActiveCount
+            ?.takeIf { it > 0 }
             ?: event.reportedParticipantCount
             ?: 0
         if (activeParticipantCount < MIN_PARTICIPANTS_TO_START) return
@@ -111,10 +119,15 @@ class CallRoomLifecycleService(
 
     private fun maybeEndCallWhenRoomEmpty(event: CallRoomEvent, call: CallRecord) {
         if (event.participant?.isEgress == true) return
-        val presentParticipantCount = participantReader
-            ?.countPresentNonEgressParticipants(call.roomName)
-            ?: event.reportedParticipantCount
-            ?: 0
+        val readerPresentCount = participantReader?.countPresentNonEgressParticipants(call.roomName)
+        val webhookPresentCount = event.reportedParticipantCount
+        // Do not let a stale provider snapshot of zero end a call while the
+        // webhook still reports a participant in the room.
+        val presentParticipantCount = when {
+            readerPresentCount == null -> webhookPresentCount ?: 0
+            readerPresentCount == 0 && webhookPresentCount != null && webhookPresentCount > 0 -> webhookPresentCount
+            else -> readerPresentCount
+        }
         if (presentParticipantCount != 0) return
 
         // A provider adapter that can return identities gives us a stronger
