@@ -6,7 +6,9 @@ import life.fxs.purr.server.application.port.CallRoomParticipantReader
 import io.livekit.server.RoomServiceClient
 import life.fxs.purr.server.config.LiveKitConfig
 import livekit.LivekitModels
-import retrofit2.Call
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 interface RoomParticipantService : CallRoomParticipantReader
 
@@ -39,22 +41,27 @@ class LiveKitRoomParticipantService(
         .mapNotNull { it.identity.takeIf(String::isNotBlank) }
         .toSet()
 
-    private fun listRelevantParticipants(roomName: String): List<LivekitModels.ParticipantInfo> = roomClient.listParticipants(roomName)
-        .executeOrThrow("list participants")
-        .filter { participant -> participant.kind != LivekitModels.ParticipantInfo.Kind.EGRESS }
-
-    private fun <T> Call<T>.executeOrThrow(action: String): T {
-        val response = execute()
+    private fun listRelevantParticipants(roomName: String): List<LivekitModels.ParticipantInfo> {
+        val response = roomClient.listParticipants(roomName).execute()
+        // A provider-confirmed missing room is an empty inventory. A proxy 404,
+        // authorization failure, or provider outage is not proof of absence.
+        if (response.code() == 404) {
+            val code = runCatching {
+                Json.parseToJsonElement(response.errorBody()?.string().orEmpty())
+                    .jsonObject["code"]?.jsonPrimitive?.content
+            }.getOrNull()
+            if (code == "not_found") return emptyList()
+        }
         if (!response.isSuccessful) {
             throw ApplicationException(
                 ApplicationError.EXTERNAL_DEPENDENCY,
-                "LiveKit failed to $action: ${response.code()} ${response.message()}",
+                "LiveKit failed to list participants: ${response.code()} ${response.message()}",
             )
         }
-        return response.body()
+        return response.body()?.filter { it.kind != LivekitModels.ParticipantInfo.Kind.EGRESS }
             ?: throw ApplicationException(
                 ApplicationError.EXTERNAL_DEPENDENCY,
-                "LiveKit returned empty response while trying to $action",
+                "LiveKit returned empty response while trying to list participants",
             )
     }
 }

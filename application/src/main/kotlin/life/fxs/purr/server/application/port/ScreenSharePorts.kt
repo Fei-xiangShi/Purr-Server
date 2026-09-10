@@ -55,7 +55,7 @@ interface ScreenShareStore {
 
     fun observeMissing(shareId: String, observedAtEpochMillis: Long): ScreenShareRecord?
 
-    fun requestStop(callId: String, stoppedAtEpochMillis: Long): ScreenShareTransition?
+    fun requestStop(callId: String, stoppedAtEpochMillis: Long, expectedShareId: String? = null): ScreenShareTransition?
 
     fun markExpired(shareId: String, expiredAtEpochMillis: Long): ScreenShareTransition?
 

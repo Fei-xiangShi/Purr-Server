@@ -21,10 +21,13 @@ import org.jetbrains.exposed.sql.update
 
 class ScreenShareRepository : ScreenShareStore {
     override fun createIfAbsent(record: ScreenShareRecord): Boolean = transaction {
-        CallSessionsTable.selectAll()
+        val call = CallSessionsTable.selectAll()
             .where { CallSessionsTable.callId eq record.callId }
             .forUpdate()
             .single()
+        if (call[CallSessionsTable.callState] != life.fxs.purr.server.model.CallState.ACTIVE.wireValue) {
+            return@transaction false
+        }
         if (findActiveByCallInCurrentTransaction(record.callId) != null) return@transaction false
         ScreenSharesTable.insert {
             it[shareId] = record.shareId
@@ -133,7 +136,7 @@ class ScreenShareRepository : ScreenShareStore {
         findByShareIdInCurrentTransaction(shareId)
     }
 
-    override fun requestStop(callId: String, stoppedAtEpochMillis: Long): ScreenShareTransition? = transaction {
+    override fun requestStop(callId: String, stoppedAtEpochMillis: Long, expectedShareId: String?): ScreenShareTransition? = transaction {
         val current = ScreenSharesTable.selectAll()
             .where { ScreenSharesTable.callId eq callId }
             .orderBy(ScreenSharesTable.createdAtEpochMillis to SortOrder.DESC)
@@ -142,6 +145,7 @@ class ScreenShareRepository : ScreenShareStore {
             .singleOrNull()
             ?.toRecord()
             ?: return@transaction null
+        if (expectedShareId != null && current.shareId != expectedShareId) return@transaction null
         if (current.status !in activeStatuses) return@transaction ScreenShareTransition(current, changed = false)
         transition(current, ScreenShareStatus.STOPPING, stoppedAtEpochMillis, null)
     }
@@ -187,6 +191,7 @@ class ScreenShareRepository : ScreenShareStore {
         ScreenSharesTable.update({ ScreenSharesTable.shareId eq shareId }) {
             it[updatedAtEpochMillis] = observedAtEpochMillis
             it[lastError] = message.take(MAX_ERROR_LENGTH)
+            it[providerCleanedAtEpochMillis] = null
         }
         findByShareIdInCurrentTransaction(shareId)
     }

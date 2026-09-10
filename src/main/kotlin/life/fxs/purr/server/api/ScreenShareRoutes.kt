@@ -63,7 +63,8 @@ fun Route.registerScreenShareRoutes(dependencies: ServerDependencies) {
             val callId = call.requireCallId()
             val user = call.requireAuthenticatedUser()
             call.response.headers.append(HttpHeaders.CacheControl, "no-store")
-            val result = onBlockingIo { dependencies.screenShareService.stop(user.userId, callId) }
+            val expectedShareId = call.request.queryParameters["expectedShareId"]
+            val result = onBlockingIo { dependencies.screenShareService.stop(user.userId, callId, expectedShareId) }
             call.respond(HttpStatusCode.OK, ScreenShareEnvelopeDto(result?.toDto()))
         }
     }

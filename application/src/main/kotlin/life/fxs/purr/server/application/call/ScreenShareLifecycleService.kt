@@ -17,8 +17,8 @@ class ScreenShareLifecycleService(
     private val transaction: ApplicationTransaction,
     private val realtimeOutbox: RealtimeOutbox,
 ) : ScreenShareTerminator {
-    fun stop(callId: String, stoppedAtEpochMillis: Long): ScreenShareRecord? = transaction.execute {
-        val transition = store.requestStop(callId, stoppedAtEpochMillis) ?: return@execute null
+    fun stop(callId: String, stoppedAtEpochMillis: Long, expectedShareId: String? = null): ScreenShareRecord? = transaction.execute {
+        val transition = store.requestStop(callId, stoppedAtEpochMillis, expectedShareId) ?: return@execute null
         publishIfChanged(transition, stoppedAtEpochMillis)
         transition.record
     }

@@ -74,6 +74,7 @@ class CallRoomReconciliationIntegrationTest {
                 roomTerminator = NoOpRoomTerminator,
             )
             val callSessionService = CallSessionService(
+                waitingCallTerminator = lifecycle,
                 pairService = pairService,
                 callAccessPolicy = CallAccessPolicy(pairService, calls),
                 callSessionStore = calls,

@@ -524,7 +524,7 @@ class PurrRoutesTest {
         val nextSessionB = client.post("/calls/session") {
             header("Authorization", "Bearer $userBToken")
             contentType(ContentType.Application.Json)
-            setBody("""{"pairId":"pair-demo","recordingConsent":true}""")
+            setBody("""{"pairId":"pair-demo","expectedCallId":"$nextCallId","recordingConsent":true}""")
         }
         assertEquals(HttpStatusCode.OK, nextSessionB.status)
         assertTrue(nextSessionB.bodyAsText().contains("\"callId\":\"$nextCallId\""), "second call join")
@@ -591,6 +591,42 @@ class PurrRoutesTest {
             header("Authorization", "Bearer $userAToken")
         }
         assertEquals(HttpStatusCode.OK, endCall.status)
+    }
+
+    @Test
+    fun `caller cancel and callee decline end waiting calls and allow a fresh call`() = isolatedTestApplication {
+        val caller = client.login("user-a", "pass-a")
+        val callee = client.login("user-b", "pass-b")
+        var previousCallId: String? = null
+        for (endingUser in listOf(caller, callee)) {
+            val session = client.post("/calls/session") {
+                header("Authorization", "Bearer $caller")
+                contentType(ContentType.Application.Json)
+                setBody("""{"pairId":"pair-demo","recordingConsent":true}""")
+            }
+            assertEquals(HttpStatusCode.OK, session.status)
+            val callId = Regex("\"callId\":\"([^\"]+)\"").find(session.bodyAsText())!!.groupValues[1]
+            assertTrue(callId != previousCallId)
+            repeat(2) {
+                val end = client.post("/calls/$callId/end") {
+                    header("Authorization", "Bearer $endingUser")
+                }
+                assertEquals(HttpStatusCode.OK, end.status)
+            }
+            for (token in listOf(caller, callee)) {
+                val status = client.get("/calls/$callId") { header("Authorization", "Bearer $token") }
+                assertTrue(status.bodyAsText().contains("\"state\":\"ended\""))
+                val active = client.get("/calls/active") { header("Authorization", "Bearer $token") }
+                assertTrue(!active.bodyAsText().contains(callId))
+            }
+            val staleAnswer = client.post("/calls/session") {
+                header("Authorization", "Bearer $callee")
+                contentType(ContentType.Application.Json)
+                setBody("""{"pairId":"pair-demo","recordingConsent":true,"expectedCallId":"$callId"}""")
+            }
+            assertEquals(HttpStatusCode.Conflict, staleAnswer.status)
+            previousCallId = callId
+        }
     }
 
     @Test
@@ -697,7 +733,7 @@ class PurrRoutesTest {
         val sessionB = client.post("/calls/session") {
             header("Authorization", "Bearer $userBToken")
             contentType(ContentType.Application.Json)
-            setBody("""{"pairId":"pair-demo","recordingConsent":true}""")
+            setBody("""{"pairId":"pair-demo","expectedCallId":"$callId","recordingConsent":true}""")
         }
         assertEquals(HttpStatusCode.OK, sessionB.status)
 
@@ -988,8 +1024,18 @@ class PurrRoutesTest {
                 }
                 assertEquals(HttpStatusCode.NoContent, readAuth.status)
 
-                val stop = client.delete("/calls/$callId/screen-share") {
+                val peerLeave = client.delete("/calls/$callId/screen-share") {
                     header(HttpHeaders.Authorization, "Bearer $userBToken")
+                }
+                assertEquals(HttpStatusCode.OK, peerLeave.status)
+                assertTrue(!mediaMtx.deletedPaths.contains(mediaPath))
+                val staleStop = client.delete("/calls/$callId/screen-share?expectedShareId=old-share") {
+                    header(HttpHeaders.Authorization, "Bearer $userAToken")
+                }
+                assertEquals(HttpStatusCode.OK, staleStop.status)
+                assertTrue(!mediaMtx.deletedPaths.contains(mediaPath))
+                val stop = client.delete("/calls/$callId/screen-share") {
+                    header(HttpHeaders.Authorization, "Bearer $userAToken")
                 }
                 assertEquals(HttpStatusCode.OK, stop.status)
                 assertTrue(stop.bodyAsText().contains("\"status\":\"stopped\""))

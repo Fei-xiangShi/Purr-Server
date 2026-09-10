@@ -149,11 +149,8 @@ class CallRoomLifecycleService(
     private fun participantIdentity(userId: String, callId: String): String = "$userId-$callId"
 
     override fun terminate(callId: String, endedAtEpochMillis: Long) {
-        var roomNameForCleanup: String? = null
-        val stopCommandClaimed = transaction.execute {
+        val found = transaction.execute {
             val current = callSessionStore.find(callId) ?: return@execute false
-            roomNameForCleanup = current.roomName
-            var claimedDurableStop = false
             val stopping = callSessionStore.claimRecordingStop(
                 callId = current.callId,
                 recordingId = current.recordingId,
@@ -166,26 +163,28 @@ class CallRoomLifecycleService(
                     recordingId = stopping.recordingId,
                     requestedAtEpochMillis = endedAtEpochMillis,
                 )
-                claimedDurableStop = true
             }
             callLifecycleService.endOpenCall(
                 callId = current.callId,
                 endedAtEpochMillis = endedAtEpochMillis,
             )
-            claimedDurableStop
-        }
-        if (stopCommandClaimed) {
-            drainRecordingCommandsBestEffort()
-            recordingCommandWakeup?.wake()
-        } else {
-            val roomName = roomNameForCleanup ?: return
-            transaction.execute {
+            // A duplicate end while STOP is pending must not bypass recording
+            // shutdown and delete the room. Read the current persisted status
+            // after the conditional claim, including concurrent stop claims.
+            val ended = checkNotNull(callSessionStore.find(callId))
+            if (ended.recordingStatus !in setOf(
+                    RecordingStatus.STARTING, RecordingStatus.RECORDING, RecordingStatus.STOPPING,
+                )
+            ) {
                 recordingCommandStore.enqueueRoomDelete(
                     callId = callId,
-                    roomName = roomName,
+                    roomName = ended.roomName,
                     requestedAtEpochMillis = endedAtEpochMillis,
                 )
             }
+            true
+        }
+        if (found) {
             drainRecordingCommandsBestEffort()
             recordingCommandWakeup?.wake()
         }

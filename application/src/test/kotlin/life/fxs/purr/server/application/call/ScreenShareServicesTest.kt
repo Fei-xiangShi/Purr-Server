@@ -7,6 +7,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
+import life.fxs.purr.server.application.ApplicationException
 import life.fxs.purr.server.application.account.PairService
 import life.fxs.purr.server.application.model.CallHistoryCursor
 import life.fxs.purr.server.application.model.CreateScreenShareCommand
@@ -38,6 +40,34 @@ import life.fxs.purr.server.model.ScreenShareStatus
 
 class ScreenShareServicesTest {
     @Test
+    fun `stop during provider provisioning never returns publishing credentials`() {
+        val fixture = Fixture()
+        fixture.provider.onEnsure = { fixture.lifecycle.stop(CALL_ID, NOW) }
+
+        assertFailsWith<ApplicationException> {
+            fixture.service.create(USER_A, CALL_ID, CreateScreenShareCommand(ScreenShareSource.MOBILE))
+        }
+        assertEquals(1, fixture.provider.cleaned.size)
+        assertNull(fixture.service.get(USER_A, CALL_ID)?.publishing)
+        assertNull(fixture.service.get(USER_A, CALL_ID)?.playback)
+    }
+
+    @Test
+    fun `provider cleanup failure remains stopping until reconciliation succeeds`() {
+        val fixture = Fixture()
+        fixture.service.create(USER_A, CALL_ID, CreateScreenShareCommand(ScreenShareSource.MOBILE))
+        fixture.provider.cleanupFailure = IllegalStateException("provider unavailable")
+
+        val stopping = fixture.service.stop(USER_A, CALL_ID)
+        assertEquals(ScreenShareStatus.STOPPING, stopping?.status)
+        assertNull(fixture.store.findByShareId(SHARE_ID)?.providerCleanedAtEpochMillis)
+        assertNull(stopping?.playback)
+        fixture.provider.cleanupFailure = null
+        val stopped = fixture.service.stop(USER_A, CALL_ID)
+        assertEquals(ScreenShareStatus.STOPPED, stopped?.status)
+    }
+
+    @Test
     fun `obs create returns whip whep and encrypted srt fallback then stop revokes the share`() {
         val fixture = Fixture()
 
@@ -59,7 +89,14 @@ class ScreenShareServicesTest {
         assertNotNull(viewedByPartner?.playback)
         assertNull(viewedByPartner?.publishing)
 
-        val stopped = fixture.service.stop(USER_B, CALL_ID)
+        val stillOwnedByA = fixture.service.stop(USER_B, CALL_ID)
+        assertEquals(ScreenShareStatus.AUTHORIZED, stillOwnedByA?.status)
+        assertEquals(0, fixture.provider.cleaned.size)
+        val staleStop = fixture.service.stop(USER_A, CALL_ID, expectedShareId = "old-share")
+        assertEquals(ScreenShareStatus.AUTHORIZED, staleStop?.status)
+        assertEquals(0, fixture.provider.cleaned.size)
+
+        val stopped = fixture.service.stop(USER_A, CALL_ID, expectedShareId = created.shareId)
         assertEquals(ScreenShareStatus.STOPPED, stopped?.status)
         assertEquals(listOf(created.mediaPath), fixture.provider.cleaned.map { it.mediaPath })
         assertNotNull(fixture.store.findByShareId(created.shareId)?.providerCleanedAtEpochMillis)
@@ -222,9 +259,12 @@ class ScreenShareServicesTest {
         val cleaned = mutableListOf<ScreenShareRecord>()
         var paths: Map<String, ScreenShareProviderPath> = emptyMap()
         var snapshotFailure: Throwable? = null
+        var cleanupFailure: Throwable? = null
+        var onEnsure: (() -> Unit)? = null
 
         override fun ensurePath(record: ScreenShareRecord, srtPublishPassphrase: String) {
             ensured += record
+            onEnsure?.invoke()
         }
 
         override fun snapshot(): ScreenShareProviderSnapshot {
@@ -233,6 +273,7 @@ class ScreenShareServicesTest {
         }
 
         override fun cleanup(record: ScreenShareRecord) {
+            cleanupFailure?.let { throw it }
             cleaned += record
         }
     }
@@ -298,8 +339,9 @@ class ScreenShareServicesTest {
             )
         }
 
-        override fun requestStop(callId: String, stoppedAtEpochMillis: Long): ScreenShareTransition? {
+        override fun requestStop(callId: String, stoppedAtEpochMillis: Long, expectedShareId: String?): ScreenShareTransition? {
             val current = findCurrentByCallId(callId) ?: return null
+            if (expectedShareId != null && current.shareId != expectedShareId) return null
             if (current.status !in activeStatuses) return ScreenShareTransition(current, false)
             return transition(current.shareId, ScreenShareStatus.STOPPING, stoppedAtEpochMillis, null)
         }

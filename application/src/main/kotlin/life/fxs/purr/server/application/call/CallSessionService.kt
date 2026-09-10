@@ -15,6 +15,7 @@ import life.fxs.purr.server.application.port.MediaTokenIssuer
 import life.fxs.purr.server.application.port.RealtimeEvent
 import life.fxs.purr.server.application.port.RealtimeOutbox
 import life.fxs.purr.server.application.port.RecordingConsentStore
+import life.fxs.purr.server.application.port.WaitingCallTerminator
 import life.fxs.purr.server.model.CallState
 import life.fxs.purr.server.model.RecordingStatus
 import life.fxs.purr.server.application.account.PairService
@@ -30,6 +31,7 @@ class CallSessionService(
     private val consentPolicyVersion: String,
     private val transaction: ApplicationTransaction,
     private val realtimeOutbox: RealtimeOutbox,
+    private val waitingCallTerminator: WaitingCallTerminator,
     private val nowProvider: () -> Instant = Instant::now,
     private val callIdProvider: () -> String = { "call-${UUID.randomUUID()}" },
 ) {
@@ -49,6 +51,12 @@ class CallSessionService(
                 }
                 newCall(command.pairId, userId)
             }.also { resolution ->
+                if (command.expectedCallId == null && !resolution.created) {
+                    throw ApplicationException(
+                        ApplicationError.CONFLICT,
+                        "An unfinished call already exists; answer the current incoming call instead",
+                    )
+                }
                 command.expectedCallId?.let { expectedCallId ->
                     if (resolution.call.callId != expectedCallId || resolution.call.createdByUserId == userId) {
                         throw ApplicationException(
@@ -90,13 +98,13 @@ class CallSessionService(
 
     fun endCall(userId: String, callId: String) {
         callAccessPolicy.requireAccessibleCall(userId, callId)
-        // The HTTP end acknowledgement represents only this user's local
-        // hang-up. It must not transition the shared call to ENDED or delete
-        // the LiveKit room while the peer is still connected. The room
-        // lifecycle service observes the participant_left webhooks and ends
-        // the shared call only after the room has become empty (or LiveKit
-        // reports room_finished). Keeping this endpoint idempotent also lets
-        // the ApplicationScope retry it without blocking either participant.
+        // Before connection, both caller cancellation and callee rejection end
+        // the invitation. The conditional WAITING transition also protects an
+        // ACTIVE call if activation races with this request.
+        waitingCallTerminator.endWaitingCall(callId, nowProvider().toEpochMilli())
+        // After connection this is only a local hang-up acknowledgement. Keep
+        // the shared call while anyone remains; room-empty events/reconciliation
+        // own the final transition and recording shutdown.
     }
 
     private fun newCall(pairId: String, createdByUserId: String): CallRecord {

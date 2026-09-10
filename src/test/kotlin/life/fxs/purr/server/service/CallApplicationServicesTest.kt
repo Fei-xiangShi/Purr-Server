@@ -7,6 +7,9 @@ import java.util.concurrent.TimeUnit
 import java.util.Collections
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import life.fxs.purr.server.application.ApplicationException
+import life.fxs.purr.server.application.ApplicationError
 import life.fxs.purr.server.config.DatabaseConfig
 import life.fxs.purr.server.config.LiveKitConfig
 import life.fxs.purr.server.config.RecordingConfig
@@ -35,7 +38,7 @@ import life.fxs.purr.server.repository.RecordingCommandRepository
 
 class CallApplicationServicesTest {
     @Test
-    fun `concurrent callers join one active call`() {
+    fun `concurrent outgoing requests create one call and reject the other`() {
         val databaseResources = DatabaseFactory(
             DatabaseConfig(
                 jdbcUrl = "jdbc:h2:mem:concurrent-call-${System.nanoTime()};MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
@@ -74,20 +77,23 @@ class CallApplicationServicesTest {
             ).callSessionService
             val start = CountDownLatch(1)
             val futures = listOf("user-a", "user-b").map { userId ->
-                executor.submit<CallSessionResult> {
+                executor.submit<Result<CallSessionResult>> {
                     check(start.await(5, TimeUnit.SECONDS))
-                    service.createSession(
-                        userId,
-                        CreateCallSessionCommand("pair-demo", expectedCallId = null, recordingConsent = false),
-                    )
+                    runCatching {
+                        service.createSession(
+                            userId,
+                            CreateCallSessionCommand("pair-demo", expectedCallId = null, recordingConsent = false),
+                        )
+                    }
                 }
             }
 
             start.countDown()
             val sessions = futures.map { it.get(10, TimeUnit.SECONDS) }
 
-            assertEquals(1, sessions.map { it.callId }.distinct().size)
-            assertEquals(1, sessions.map { it.roomName }.distinct().size)
+            assertEquals(1, sessions.count { it.isSuccess })
+            val failure = sessions.single { it.isFailure }.exceptionOrNull() as ApplicationException
+            assertEquals(ApplicationError.CONFLICT, failure.error)
         } finally {
             executor.shutdownNow()
             (databaseResources.dataSource as? AutoCloseable)?.close()
@@ -169,15 +175,19 @@ class CallApplicationServicesTest {
             assertEquals("egress-1", stored.recordingId)
             assertEquals(null, stored.endedAtEpochMillis)
 
-            val nextSession = service.createSession(
-                userId = "user-a",
-                command = CreateCallSessionCommand(
-                    pairId = "pair-demo",
-                    expectedCallId = null,
-                    recordingConsent = false,
-                ),
-            )
-            assertEquals(callId, nextSession.callId)
+            val conflict = assertFailsWith<ApplicationException> {
+                service.createSession(
+                    userId = "user-a",
+                    command = CreateCallSessionCommand(
+                        pairId = "pair-demo",
+                        expectedCallId = null,
+                        recordingConsent = false,
+                    ),
+                )
+            }
+            assertEquals(ApplicationError.CONFLICT, conflict.error)
+            assertEquals(CallState.ACTIVE, repository.find(callId)?.state)
+
         } finally {
             (databaseResources.dataSource as? AutoCloseable)?.close()
         }
@@ -322,6 +332,12 @@ private fun createTestServices(
         recordingCommandStore = RecordingCommandRepository(callRecordingRepository) { "command-${System.nanoTime()}" },
     )
     val callSessionService = CallSessionService(
+        waitingCallTerminator = life.fxs.purr.server.application.call.CallLifecycleService(
+            callSessionStore = callSessionRepository,
+            pairStore = PairBondRepository(),
+            transaction = ImmediateTransaction,
+            realtimeOutbox = RealtimeOutbox { _, _, _ -> },
+        ),
         pairService = pairService,
         callAccessPolicy = accessPolicy,
         callSessionStore = callSessionRepository,

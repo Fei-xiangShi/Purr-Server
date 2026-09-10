@@ -18,6 +18,20 @@ import life.fxs.purr.server.model.RecordingStatus
 
 class CallRoomReconciliationServiceTest {
     @Test
+    fun `active room with one participant stays open regardless of elapsed time`() {
+        val store = ReconciliationStore(activeCall())
+        val reader = MutableParticipantReader(1)
+        val events = RecordingEventHandler()
+        val service = service(store, reader, events)
+
+        listOf(1_000L, 120_000L, 86_400_000L).forEach(service::reconcileOnce)
+
+        assertEquals(CallState.ACTIVE, store.call.state)
+        assertEquals(null, store.call.roomEmptySinceEpochMillis)
+        assertEquals(emptyList(), events.events)
+    }
+
+    @Test
     fun `active empty room must remain empty for the full grace period`() {
         val store = ReconciliationStore(activeCall())
         val reader = MutableParticipantReader(0)

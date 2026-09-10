@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.application.port.ScreenShareRecord
@@ -36,6 +37,8 @@ class ScreenShareRepositoryTest {
             assertTrue(repository.createIfAbsent(first))
             assertFalse(repository.createIfAbsent(second))
             assertEquals(first, repository.findByMediaPath(first.mediaPath))
+            assertNull(repository.requestStop(CALL_ID, 1_050, expectedShareId = "old-share"))
+            assertEquals(ScreenShareStatus.AUTHORIZED, repository.findByShareId(first.shareId)?.status)
 
             val live = assertNotNull(repository.markLive(first.shareId, "webrtcSession", "session-1", 1_100))
             assertTrue(live.changed)

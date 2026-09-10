@@ -191,6 +191,7 @@ class CallRoomLifecycleServiceTest {
         assertEquals(1, harness.calls.endTransitions)
         assertEquals(setOf("user-a", "user-b"), harness.outbox.map { it.first }.toSet())
         assertEquals(2, harness.outbox.size)
+        assertEquals(0, harness.recordingCommands.deletes.size)
     }
 
     @Test
@@ -329,6 +330,7 @@ class CallRoomLifecycleServiceTest {
 private class FakeRecordingCommandStore : RecordingCommandStore {
     val starts = mutableListOf<RecordingCommandRecord>()
     val stops = mutableListOf<RecordingCommandRecord>()
+    val deletes = mutableListOf<RecordingCommandRecord>()
 
     override fun enqueueStart(
         callId: String,
@@ -393,7 +395,7 @@ private class FakeRecordingCommandStore : RecordingCommandStore {
         state = RecordingCommandState.PENDING,
         completedAtEpochMillis = null,
         lastError = null,
-    )
+    ).also(deletes::add)
 
     override fun claimBatch(
         workerId: String,

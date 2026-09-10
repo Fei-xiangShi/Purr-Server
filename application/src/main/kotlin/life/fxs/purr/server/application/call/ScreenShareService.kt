@@ -62,7 +62,7 @@ class ScreenShareService(
             true
         }
         if (!created) {
-            throw ApplicationException(ApplicationError.CONFLICT, "This call already has an active screen share")
+            throw ApplicationException(ApplicationError.CONFLICT, "Call is no longer active or already has a screen share")
         }
 
         val passphrase = srtPassphraseIssuer.issue(record.shareId)
@@ -72,7 +72,19 @@ class ScreenShareService(
             lifecycleService.fail(record.shareId, nowProvider().toEpochMilli(), error.boundedMessage())
             throw ApplicationException(ApplicationError.EXTERNAL_DEPENDENCY, "Screen media service is unavailable")
         }
-        return record.toResult(userId, includePublishing = true, srtPassphrase = passphrase)
+        val current = checkNotNull(store.findByShareId(record.shareId))
+        if (callAccessPolicy.requireAccessibleCall(userId, callId).state != CallState.ACTIVE ||
+            current.status !in setOf(ScreenShareStatus.AUTHORIZED, ScreenShareStatus.LIVE)
+        ) {
+            lifecycleService.stop(callId, nowProvider().toEpochMilli(), record.shareId)
+            // ensurePath may have completed after a prior cleanup. Revoke the
+            // exact path again and leave provider errors retryable.
+            runCatching { provider.cleanup(record) }
+                .onSuccess { store.markProviderCleaned(record.shareId, nowProvider().toEpochMilli()) }
+                .onFailure { store.recordProviderError(record.shareId, nowProvider().toEpochMilli(), it.boundedMessage()) }
+            throw ApplicationException(ApplicationError.CONFLICT, "Screen share ended during preparation")
+        }
+        return current.toResult(userId, includePublishing = true, srtPassphrase = passphrase)
     }
 
     fun get(userId: String, callId: String): ScreenShareResult? {
@@ -81,16 +93,27 @@ class ScreenShareService(
         return store.findCurrentByCallId(callId)?.toResult(userId, includePublishing = false)
     }
 
-    fun stop(userId: String, callId: String): ScreenShareResult? {
+    fun stop(userId: String, callId: String, expectedShareId: String? = null): ScreenShareResult? {
         requireEnabled()
         callAccessPolicy.requireAccessibleCall(userId, callId)
-        val record = lifecycleService.stop(callId, nowProvider().toEpochMilli()) ?: return null
-        runCatching { provider.cleanup(record) }
+        val current = store.findCurrentByCallId(callId) ?: return null
+        // Leaving the voice room must not stop a peer-owned OBS/mobile stream.
+        // Shared call termination still stops all media through the internal lifecycle.
+        if (current.ownerUserId != userId || (expectedShareId != null && current.shareId != expectedShareId)) {
+            return current.toResult(userId, includePublishing = false)
+        }
+        val record = lifecycleService.stop(callId, nowProvider().toEpochMilli(), current.shareId)
+            ?: return get(userId, callId)
+        val cleanup = runCatching { provider.cleanup(record) }
             .onSuccess { store.markProviderCleaned(record.shareId, nowProvider().toEpochMilli()) }
             .onFailure { error ->
                 store.recordProviderError(record.shareId, nowProvider().toEpochMilli(), error.boundedMessage())
             }
-        val stopped = lifecycleService.stopped(record.shareId, nowProvider().toEpochMilli()) ?: record
+        val stopped = if (cleanup.isSuccess) {
+            lifecycleService.stopped(record.shareId, nowProvider().toEpochMilli()) ?: record
+        } else {
+            store.findByShareId(record.shareId) ?: record
+        }
         return stopped.toResult(userId, includePublishing = false)
     }
 

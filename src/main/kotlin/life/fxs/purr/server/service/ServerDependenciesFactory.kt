@@ -476,6 +476,7 @@ object ServerDependenciesFactory {
                 roomTerminator = roomTerminator,
             )
             val callSessionService = CallSessionService(
+                waitingCallTerminator = callLifecycleService,
                 pairService = pairService,
                 callAccessPolicy = callAccessPolicy,
                 callSessionStore = callSessionRepository,
