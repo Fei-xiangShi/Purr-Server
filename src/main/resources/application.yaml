@@ -35,7 +35,7 @@ purr:
     wsUrl: "ws://localhost:7880"
     httpUrl: "http://localhost:7880"
     apiKey: devkey
-    apiSecret: devsecret
+    apiSecret: dev-livekit-secret-change-me-at-least-32-bytes
     tokenTtlSeconds: 3600
   recording:
     enabled: true

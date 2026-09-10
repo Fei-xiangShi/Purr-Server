@@ -46,6 +46,15 @@ class PurrConfigLoaderTest {
     }
 
     @Test
+    fun `LiveKit rejects an API secret shorter than server requirements`() {
+        val config = validProductionConfig().copy(
+            liveKit = validProductionConfig().liveKit.copy(apiSecret = "too-short"),
+        )
+
+        assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(config) }
+    }
+
+    @Test
     fun `production rejects short authentication rate limit Redis password`() {
         val config = validProductionConfig().copy(
             rateLimit = validProductionConfig().rateLimit.copy(redisPassword = "too-short"),
@@ -272,7 +281,7 @@ class PurrConfigLoaderTest {
         liveKit = LiveKitConfig(
             wsUrl = "wss://call.example.com",
             apiKey = "key",
-            apiSecret = "a-strong-livekit-secret",
+            apiSecret = "a-strong-livekit-api-secret-with-32-bytes",
             tokenTtlSeconds = 900,
             httpUrl = "http://livekit:7880",
         ),

@@ -49,6 +49,7 @@ class MediaMtxHttpScreenShareProvider(
                     online = path.online,
                     sourceType = path.source?.type,
                     sourceId = path.source?.id,
+                    inboundBytes = path.inboundBytes,
                 )
             }
         return ScreenShareProviderSnapshot(paths)
@@ -134,6 +135,7 @@ class MediaMtxHttpScreenShareProvider(
     private data class PathResponse(
         val name: String,
         val online: Boolean = false,
+        val inboundBytes: Long? = null,
         val source: PathSourceResponse? = null,
     )
 

@@ -427,6 +427,9 @@ object PurrConfigLoader {
         require(config.liveKit.tokenTtlSeconds in 60..3600) {
             "LiveKit token TTL must be between 60 and 3600 seconds"
         }
+        require(config.liveKit.apiSecret.toByteArray().size >= 32) {
+            "LiveKit API secret must contain at least 32 bytes"
+        }
         require(config.database.maximumPoolSize in 1..100) {
             "Database pool size must be between 1 and 100"
         }

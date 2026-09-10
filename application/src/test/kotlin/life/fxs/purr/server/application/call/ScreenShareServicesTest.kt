@@ -125,6 +125,37 @@ class ScreenShareServicesTest {
         assertEquals(listOf(live.mediaPath), fixture.provider.cleaned.map { it.mediaPath })
     }
 
+    @Test
+    fun `online path with stalled ingress is stopped within the reconciliation window`() {
+        val fixture = Fixture()
+        val live = fixture.record(status = ScreenShareStatus.LIVE)
+        fixture.store.createIfAbsent(live)
+        fixture.provider.paths = mapOf(
+            live.mediaPath to ScreenShareProviderPath(
+                mediaPath = live.mediaPath,
+                online = true,
+                sourceType = "webrtcSession",
+                sourceId = "publisher-1",
+                inboundBytes = 10_000,
+            ),
+        )
+        val reconciliation = ScreenShareReconciliationService(
+            store = fixture.store,
+            provider = fixture.provider,
+            lifecycleService = fixture.lifecycle,
+            batchSize = 10,
+        )
+
+        reconciliation.reconcileOnce(NOW)
+        repeat(4) { index -> reconciliation.reconcileOnce(NOW + index + 1L) }
+        assertEquals(ScreenShareStatus.LIVE, fixture.store.findByShareId(live.shareId)?.status)
+
+        reconciliation.reconcileOnce(NOW + 5)
+        assertEquals(ScreenShareStatus.STOPPED, fixture.store.findByShareId(live.shareId)?.status)
+        assertEquals("Publisher stopped sending media", fixture.store.findByShareId(live.shareId)?.lastError)
+        assertEquals(listOf(live.mediaPath), fixture.provider.cleaned.map { it.mediaPath })
+    }
+
     private fun request(token: String, action: String, protocol: String, path: String) =
         ScreenShareAuthorizationRequest(token, null, action, protocol, path)
 

@@ -21,8 +21,10 @@ COPY infrastructure/src /workspace/infrastructure/src
 
 # The Gradle base image already contains the pinned 8.10.2 distribution. Using
 # it directly avoids a second wrapper download during image builds.
-RUN --mount=type=cache,id=purr-server-gradle-build-cache,target=/home/gradle/.gradle/caches/build-cache-1,sharing=locked \
-    gradle --no-daemon --build-cache installDist
+# Keep the image build compatible with Docker installations that do not ship
+# the optional buildx plugin. Gradle's own build cache remains enabled; a
+# BuildKit cache mount is an optimization, not a runtime requirement.
+RUN gradle --no-daemon --build-cache installDist
 
 FROM eclipse-temurin:17-jre@sha256:1824944ef1bd572d1ff0952afeb2fec7931d77c972c4fbc4dfcdf89f758fb490
 WORKDIR /app

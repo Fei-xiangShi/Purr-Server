@@ -107,6 +107,7 @@ data class ScreenShareProviderPath(
     val online: Boolean,
     val sourceType: String?,
     val sourceId: String?,
+    val inboundBytes: Long? = null,
 )
 
 data class ScreenShareProviderSnapshot(

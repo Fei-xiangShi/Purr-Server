@@ -30,6 +30,7 @@ class MediaMtxHttpScreenShareProviderTest {
             assertEquals(true, snapshot.paths[record.mediaPath]?.online)
             assertEquals("webrtcSession", snapshot.paths[record.mediaPath]?.sourceType)
             assertEquals("source-1", snapshot.paths[record.mediaPath]?.sourceId)
+            assertEquals(1234L, snapshot.paths[record.mediaPath]?.inboundBytes)
             assertEquals(false, snapshot.paths["screen-other"]?.online)
 
             val add = stub.requests.first { it.path == "/v3/config/paths/add/${record.mediaPath}" }
@@ -75,7 +76,7 @@ class MediaMtxHttpScreenShareProviderTest {
         private fun responseFor(path: String, query: String?): String = when (path) {
             "/v3/paths/list" -> if (query?.contains("page=0") == true) {
                 """
-                    {"items":[{"name":"screen-share-1","online":true,
+                    {"items":[{"name":"screen-share-1","online":true,"inboundBytes":1234,
                     "source":{"type":"webrtcSession","id":"source-1"}}],"pageCount":2}
                 """.trimIndent()
             } else {

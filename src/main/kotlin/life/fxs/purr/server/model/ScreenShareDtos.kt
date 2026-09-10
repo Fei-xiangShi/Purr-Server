@@ -58,7 +58,9 @@ data class MediaMtxAuthRequestDto(
     val action: String = "",
     val path: String = "",
     val protocol: String = "",
-    val id: String = "",
+    // MediaMTX authenticates WHEP access before a WebRTC session exists, so
+    // the provider contract intentionally sends this field as JSON null.
+    val id: String? = null,
     val query: String = "",
     val userAgent: String = "",
 )

@@ -21,6 +21,10 @@ Create DNS for PURR_STREAM_DOMAIN and point it at the server. Expose:
 Do not expose MediaMTX ports 8889, 9997 or 9998. They are private Compose
 listeners for signaling proxying, the Control API and metrics.
 
+The local debug override additionally advertises MediaMTX's Compose-network
+address, allowing a containerized OBS/FFmpeg publisher to complete ICE while
+Android emulators continue to use the explicit `10.0.2.2` candidate.
+
 The API domain returns 404 for /internal and /internal/*; only MediaMTX on the
 private Compose network calls /internal/mediamtx/auth.
 
@@ -47,8 +51,9 @@ Copy .env.example to .env, replace every placeholder, then run:
     docker compose --env-file .env config -q
     docker compose --profile bundled-proxy --env-file .env up -d --build
 
-MediaMTX uses readTimeout: 7s. Purr reconciles once per second and requires two
-consecutive successful complete snapshots before converting a live share to
+MediaMTX uses readTimeout: 7s. Purr reconciles once per second, tracks inbound
+media-byte progress to catch WebRTC sessions whose ICE failure is reported late,
+and requires two consecutive successful complete missing snapshots before converting a live share to
 stopped. Provider errors never synthesize a stopped state.
 
 ## OBS

@@ -983,7 +983,7 @@ class PurrRoutesTest {
                 val readAuth = client.post("/internal/mediamtx/auth") {
                     contentType(ContentType.Application.Json)
                     setBody(
-                        """{"token":"$readToken","action":"read","protocol":"webrtc","path":"$mediaPath"}""",
+                        """{"token":"$readToken","action":"read","protocol":"webrtc","path":"$mediaPath","id":null}""",
                     )
                 }
                 assertEquals(HttpStatusCode.NoContent, readAuth.status)
@@ -1136,7 +1136,7 @@ class PurrRoutesTest {
         return JWT.create()
             .withIssuer("devkey")
             .withClaim("sha256", sha256)
-            .sign(Algorithm.HMAC256("devsecret"))
+            .sign(Algorithm.HMAC256("dev-livekit-secret-change-me-at-least-32-bytes"))
     }
 }
 

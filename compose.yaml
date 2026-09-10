@@ -140,11 +140,12 @@ services:
           stun_servers:
             - stun.l.google.com:19302
             - stun.cloudflare.com:3478
-          # Tencent Cloud exposes a public address through the host/NAT
-          # boundary; advertise the externally reachable candidate instead of
-          # the container address. Without this, signaling succeeds but media
-          # ICE candidates can point at an unreachable private interface.
-          use_external_ip: true
+          # LIVEKIT_NODE_IP is required above and is the authoritative address
+          # advertised to clients. Do not ask LiveKit to rediscover it through
+          # public STUN during startup: that makes an otherwise healthy node
+          # crash-loop on hosts (and local Docker/VM test networks) where the
+          # discovery request is filtered or times out.
+          use_external_ip: false
         # Embedded TURN keeps calls working when a mobile network blocks
         # direct peer candidates or UDP ICE checks. The host certificate
         # covers livekit.purr.fxs.life and is mounted read-only below.
@@ -183,7 +184,7 @@ services:
 
   mediamtx:
     restart: unless-stopped
-    image: bluenviron/mediamtx:1.21.0@sha256:19fddade8d6110a3d718ac0045681fbeba344ae4fc21fe77e8310c060f61caaff8a
+    image: bluenviron/mediamtx:1.21.0@sha256:19fddade8d6110a3d718ac0045681fbeba344ae563a066205fe5929a87f7582f
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -199,7 +200,10 @@ services:
       MTX_WEBRTCICESERVERS2_0_URL: ${MEDIAMTX_TURN_URL:?MEDIAMTX_TURN_URL is required}
       MTX_WEBRTCICESERVERS2_0_USERNAME: ${MEDIAMTX_TURN_USERNAME:?MEDIAMTX_TURN_USERNAME is required}
       MTX_WEBRTCICESERVERS2_0_PASSWORD: ${MEDIAMTX_TURN_PASSWORD:?MEDIAMTX_TURN_PASSWORD is required}
-      MTX_WEBRTCICESERVERS2_0_CLIENTONLY: "false"
+      # The server already exposes a stable UDP candidate. TURN is advertised
+      # to restrictive clients only; making MediaMTX gather its own relay
+      # candidate delays WHIP/WHEP answers and can exceed mobile HTTP timeouts.
+      MTX_WEBRTCICESERVERS2_0_CLIENTONLY: "true"
     ports:
       - "8189:8189/udp"
       - "8890:8890/udp"

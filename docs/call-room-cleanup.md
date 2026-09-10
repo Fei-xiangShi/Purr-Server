@@ -22,3 +22,21 @@ backoff and startup reconciliation as recording commands. A provider failure
 therefore remains retryable across webhook duplicates and server restarts. Room
 deletion never gates admission of a new call; every call owns its room and its
 cleanup commands independently.
+
+## Production network perimeter
+
+Docker publishing a LiveKit port only makes it reachable on the host. The cloud
+security group must independently allow the media paths advertised to clients:
+
+- TCP `7881` for WebRTC TCP fallback.
+- TCP `5349` for TURN over TLS.
+- UDP `3478` for TURN over UDP.
+- UDP `50000-50200` for LiveKit RTC and TURN relay traffic.
+
+The LiveKit/TURN hostname must resolve directly to the node public IP; it must
+not be proxied by an HTTP-only CDN.
+
+Signaling on `443` can succeed while all audio still fails when these rules are
+missing. In that state Android clients may gather only private host candidates;
+they cannot use the TCP/TURN fallback even though `docker compose ps`, host
+listeners, and Docker forwarding rules all look healthy.

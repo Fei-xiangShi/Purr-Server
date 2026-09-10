@@ -122,8 +122,32 @@ val verifyArchitecture by tasks.registering {
     }
 }
 
+val verifyContainerImageDigests by tasks.registering {
+    group = "verification"
+    description = "Verifies that pinned Docker image SHA-256 digests are syntactically valid."
+    val composeFile = rootProject.layout.projectDirectory.file("compose.yaml")
+    inputs.file(composeFile)
+    doLast {
+        val imageLines = composeFile.asFile.readLines()
+            .map(String::trim)
+            .filter { it.startsWith("image:") }
+        val unpinned = imageLines.filterNot { it.contains("@sha256:") }
+        check(unpinned.isEmpty()) {
+            "Every Compose image must be pinned by digest:\n${unpinned.joinToString("\n")}"
+        }
+        val invalid = imageLines.filter { line ->
+            val digest = line.substringAfter("@sha256:", missingDelimiterValue = "")
+            digest.length != 64 || digest.any { it !in '0'..'9' && it !in 'a'..'f' }
+        }
+        check(invalid.isEmpty()) {
+            "Compose contains invalid SHA-256 image digests:\n${invalid.joinToString("\n")}"
+        }
+    }
+}
+
 tasks.named("check") {
     dependsOn(verifyArchitecture)
+    dependsOn(verifyContainerImageDigests)
 }
 
 // Ktor API tests create an isolated embedded database per application. Exposed

@@ -4,6 +4,7 @@ import io.livekit.server.AccessToken
 import io.livekit.server.CanPublish
 import io.livekit.server.CanPublishData
 import io.livekit.server.CanSubscribe
+import io.livekit.server.CanUpdateOwnMetadata
 import io.livekit.server.RoomJoin
 import io.livekit.server.RoomName
 import java.time.Instant
@@ -26,6 +27,7 @@ class JwtLiveKitTokenService(
                 CanPublish(true),
                 CanSubscribe(true),
                 CanPublishData(true),
+                CanUpdateOwnMetadata(true),
             )
         }.toJwt()
     }
