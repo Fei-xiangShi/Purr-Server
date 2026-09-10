@@ -13,6 +13,8 @@ services:
         condition: service_healthy
       livekit:
         condition: service_started
+      mediamtx:
+        condition: service_started
       minio:
         condition: service_healthy
     environment:
@@ -20,6 +22,7 @@ services:
       PURR_API_DOMAIN: ${PURR_API_DOMAIN:?PURR_API_DOMAIN is required}
       PURR_LIVEKIT_DOMAIN: ${PURR_LIVEKIT_DOMAIN:?PURR_LIVEKIT_DOMAIN is required}
       PURR_STORAGE_DOMAIN: ${PURR_STORAGE_DOMAIN:?PURR_STORAGE_DOMAIN is required}
+      PURR_STREAM_DOMAIN: ${PURR_STREAM_DOMAIN:?PURR_STREAM_DOMAIN is required}
     ports:
       - "80:80"
       - "443:443"
@@ -177,6 +180,38 @@ services:
     mem_limit: 1g
     cpus: 2.00
     pids_limit: 512
+
+  mediamtx:
+    restart: unless-stopped
+    image: bluenviron/mediamtx:1.21.0@sha256:19fddade8d6110a3d718ac0045681fbeba344ae4fc21fe77e8310c060f61caaff8a
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 10s
+    depends_on:
+      purr-server:
+        condition: service_healthy
+    environment:
+      # Array-valued MediaMTX settings are overridden by indexed variables.
+      # The TURN account must be usable by a generic ICE client; LiveKit's
+      # signaling-issued ephemeral TURN credentials cannot be copied here.
+      MTX_WEBRTCADDITIONALHOSTS: ${MEDIAMTX_WEBRTC_PUBLIC_HOST:?MEDIAMTX_WEBRTC_PUBLIC_HOST is required}
+      MTX_WEBRTCICESERVERS2_0_URL: ${MEDIAMTX_TURN_URL:?MEDIAMTX_TURN_URL is required}
+      MTX_WEBRTCICESERVERS2_0_USERNAME: ${MEDIAMTX_TURN_USERNAME:?MEDIAMTX_TURN_USERNAME is required}
+      MTX_WEBRTCICESERVERS2_0_PASSWORD: ${MEDIAMTX_TURN_PASSWORD:?MEDIAMTX_TURN_PASSWORD is required}
+      MTX_WEBRTCICESERVERS2_0_CLIENTONLY: "false"
+    ports:
+      - "8189:8189/udp"
+      - "8890:8890/udp"
+    expose:
+      - "8889"
+      - "9997"
+      - "9998"
+    volumes:
+      - ./docker/mediamtx/mediamtx.yml:/mediamtx.yml:ro
+    mem_limit: 512m
+    cpus: 1.00
+    pids_limit: 256
 
   egress:
     restart: unless-stopped
@@ -345,6 +380,20 @@ services:
       PURR_CALL_RECONCILIATION_WAITING_TTL_SECONDS: ${PURR_CALL_RECONCILIATION_WAITING_TTL_SECONDS:-120}
       PURR_CALL_RECONCILIATION_EMPTY_ROOM_GRACE_SECONDS: ${PURR_CALL_RECONCILIATION_EMPTY_ROOM_GRACE_SECONDS:-15}
       PURR_CALL_RECONCILIATION_BATCH_SIZE: ${PURR_CALL_RECONCILIATION_BATCH_SIZE:-100}
+      PURR_MEDIAMTX_ENABLED: "true"
+      PURR_MEDIAMTX_PUBLIC_BASE_URL: https://${PURR_STREAM_DOMAIN:?PURR_STREAM_DOMAIN is required}
+      PURR_MEDIAMTX_API_BASE_URL: http://mediamtx:9997
+      PURR_MEDIAMTX_TOKEN_SECRET: ${PURR_MEDIAMTX_TOKEN_SECRET:?PURR_MEDIAMTX_TOKEN_SECRET is required}
+      PURR_MEDIAMTX_TOKEN_ISSUER: purr-server
+      PURR_MEDIAMTX_TOKEN_AUDIENCE: purr-mediamtx
+      PURR_MEDIAMTX_PUBLISH_TOKEN_TTL_SECONDS: ${PURR_MEDIAMTX_PUBLISH_TOKEN_TTL_SECONDS:-600}
+      PURR_MEDIAMTX_READ_TOKEN_TTL_SECONDS: ${PURR_MEDIAMTX_READ_TOKEN_TTL_SECONDS:-300}
+      PURR_MEDIAMTX_SHARE_TTL_SECONDS: ${PURR_MEDIAMTX_SHARE_TTL_SECONDS:-43200}
+      PURR_MEDIAMTX_RECONCILIATION_INTERVAL_MILLIS: ${PURR_MEDIAMTX_RECONCILIATION_INTERVAL_MILLIS:-1000}
+      PURR_MEDIAMTX_RECONCILIATION_BATCH_SIZE: ${PURR_MEDIAMTX_RECONCILIATION_BATCH_SIZE:-100}
+      PURR_MEDIAMTX_REQUEST_TIMEOUT_MILLIS: ${PURR_MEDIAMTX_REQUEST_TIMEOUT_MILLIS:-3000}
+      PURR_MEDIAMTX_SRT_PUBLIC_HOST: ${PURR_STREAM_DOMAIN:?PURR_STREAM_DOMAIN is required}
+      PURR_MEDIAMTX_SRT_PUBLIC_PORT: 8890
       PURR_RATE_LIMIT_PROVIDER: redis
       PURR_RATE_LIMIT_LIMIT: ${PURR_RATE_LIMIT_LIMIT:-10}
       PURR_RATE_LIMIT_REFILL_PERIOD_SECONDS: ${PURR_RATE_LIMIT_REFILL_PERIOD_SECONDS:-60}

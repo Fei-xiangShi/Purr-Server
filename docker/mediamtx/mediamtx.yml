@@ -1,0 +1,57 @@
+logLevel: info
+logDestinations: [stdout]
+
+# Keep abandoned mobile/OBS publishers from leaving a path apparently live for
+# tens of seconds. Durable reconciliation still requires two complete missing
+# snapshots before it declares a live share stopped.
+readTimeout: 7s
+writeTimeout: 10s
+
+authMethod: http
+authHTTPAddress: http://purr-server:8080/internal/mediamtx/auth
+authHTTPExclude:
+  - action: api
+  - action: metrics
+
+# These listeners remain private on the Compose network. The application uses
+# the API for dynamic per-share paths and reconciliation; metrics are available
+# to an internal collector only.
+api: true
+apiAddress: :9997
+metrics: true
+metricsAddress: :9998
+pprof: false
+playback: false
+
+# Purr deliberately exposes only the real-time publish/read protocols used by
+# the product. LL-HLS, RTMP and RTSP are not playback fallbacks.
+rtsp: false
+rtmp: false
+hls: false
+moq: false
+
+webrtc: true
+webrtcAddress: :8889
+webrtcEncryption: false
+webrtcAllowOrigins: ["*"]
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: ""
+webrtcIPsFromInterfaces: false
+webrtcAdditionalHosts: []
+webrtcICEServers2: []
+webrtcSTUNGatherTimeout: 5s
+webrtcHandshakeTimeout: 10s
+
+# SRT is an encrypted OBS fallback only. Every dynamic path receives its own
+# deterministic publish passphrase through the MediaMTX control API.
+srt: true
+srtAddress: :8890
+
+pathDefaults:
+  source: publisher
+  overridePublisher: false
+  maxReaders: 2
+  record: false
+
+# Paths are created and removed by purr-server. Unknown paths are rejected.
+paths: {}

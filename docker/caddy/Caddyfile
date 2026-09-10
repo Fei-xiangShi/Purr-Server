@@ -18,14 +18,27 @@
 		max_size 11MB
 	}
 
-	@internal_metrics path /metrics
-	respond @internal_metrics 404
+	@private_endpoint path /metrics /internal /internal/*
+	respond @private_endpoint 404
 
 	reverse_proxy purr-server:8080 {
 		health_uri /health/ready
 		health_interval 10s
 		health_timeout 3s
 	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}
+
+{$PURR_STREAM_DOMAIN} {
+	# WHIP and WHEP signaling is HTTPS here; DTLS-SRTP media uses the public
+	# MediaMTX ICE candidate (UDP 8189) or the configured TURN relay.
+	reverse_proxy mediamtx:8889
 
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
