@@ -14,6 +14,7 @@ data class PurrServerConfig(
     val database: DatabaseConfig,
     val callReconciliation: CallReconciliationConfig = CallReconciliationConfig(),
     val googleDrive: GoogleDriveConfig = GoogleDriveConfig(),
+    val mediaMtx: MediaMtxConfig = MediaMtxConfig(),
 )
 
 enum class RuntimeEnvironment {
@@ -161,6 +162,23 @@ data class CallReconciliationConfig(
     val waitingTtlSeconds: Long = 120,
     val emptyRoomGraceSeconds: Long = 15,
     val batchSize: Int = 100,
+)
+
+data class MediaMtxConfig(
+    val enabled: Boolean = false,
+    val publicBaseUrl: String = "http://localhost:8889",
+    val apiBaseUrl: String = "http://localhost:9997",
+    val tokenSecret: String = "dev-mediamtx-token-secret-change-me",
+    val tokenIssuer: String = "purr-server",
+    val tokenAudience: String = "purr-mediamtx",
+    val publishTokenTtlSeconds: Long = 600,
+    val readTokenTtlSeconds: Long = 300,
+    val shareTtlSeconds: Long = 43_200,
+    val reconciliationIntervalMillis: Long = 1_000,
+    val reconciliationBatchSize: Int = 100,
+    val requestTimeoutMillis: Long = 3_000,
+    val srtPublicHost: String = "localhost",
+    val srtPublicPort: Int = 8_890,
 )
 
 data class AuthRateLimitConfig(

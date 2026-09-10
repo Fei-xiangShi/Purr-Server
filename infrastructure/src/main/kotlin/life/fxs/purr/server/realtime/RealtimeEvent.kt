@@ -11,6 +11,10 @@ internal data class RealtimeEventPayload(
     val pairId: String? = null,
     val callerUserId: String? = null,
     val startedAtEpochMillis: Long? = null,
+    val screenShareId: String? = null,
+    val screenShareStatus: String? = null,
+    val screenShareSource: String? = null,
+    val screenShareOwnerUserId: String? = null,
 )
 
 internal fun RealtimeEvent.toPayload() = RealtimeEventPayload(
@@ -20,6 +24,10 @@ internal fun RealtimeEvent.toPayload() = RealtimeEventPayload(
     pairId = pairId,
     callerUserId = callerUserId,
     startedAtEpochMillis = startedAtEpochMillis,
+    screenShareId = screenShareId,
+    screenShareStatus = screenShareStatus,
+    screenShareSource = screenShareSource,
+    screenShareOwnerUserId = screenShareOwnerUserId,
 )
 
 internal fun RealtimeEventPayload.toApplicationEvent() = RealtimeEvent(
@@ -29,6 +37,10 @@ internal fun RealtimeEventPayload.toApplicationEvent() = RealtimeEvent(
     pairId = pairId,
     callerUserId = callerUserId,
     startedAtEpochMillis = startedAtEpochMillis,
+    screenShareId = screenShareId,
+    screenShareStatus = screenShareStatus,
+    screenShareSource = screenShareSource,
+    screenShareOwnerUserId = screenShareOwnerUserId,
 )
 
 class RealtimeEventEncoder(

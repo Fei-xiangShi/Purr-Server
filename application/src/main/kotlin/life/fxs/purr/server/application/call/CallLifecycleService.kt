@@ -6,12 +6,14 @@ import life.fxs.purr.server.application.port.PairStore
 import life.fxs.purr.server.application.port.RealtimeEvent
 import life.fxs.purr.server.application.port.RealtimeOutbox
 import life.fxs.purr.server.application.port.WaitingCallTerminator
+import life.fxs.purr.server.application.port.ScreenShareTerminator
 
 class CallLifecycleService(
     private val callSessionStore: CallSessionStore,
     private val pairStore: PairStore,
     private val transaction: ApplicationTransaction,
     private val realtimeOutbox: RealtimeOutbox,
+    private val screenShareTerminator: ScreenShareTerminator = ScreenShareTerminator { _, _ -> },
 ) : WaitingCallTerminator {
     override fun endWaitingCall(callId: String, endedAtEpochMillis: Long) {
         endCall(callId, endedAtEpochMillis) {
@@ -34,6 +36,8 @@ class CallLifecycleService(
             val resolution = transition()
                 ?: return@execute
             if (!resolution.endedNow) return@execute
+
+            screenShareTerminator.terminateForCall(callId, endedAtEpochMillis)
 
             val pair = checkNotNull(pairStore.findByPairId(resolution.call.pairId)) {
                 "Pair not found for call $callId"

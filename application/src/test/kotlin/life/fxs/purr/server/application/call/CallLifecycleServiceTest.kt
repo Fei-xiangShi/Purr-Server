@@ -12,6 +12,7 @@ import life.fxs.purr.server.application.port.PairRecord
 import life.fxs.purr.server.application.port.PairStore
 import life.fxs.purr.server.application.port.RealtimeEvent
 import life.fxs.purr.server.application.port.RealtimeOutbox
+import life.fxs.purr.server.application.port.ScreenShareTerminator
 import life.fxs.purr.server.model.CallState
 import life.fxs.purr.server.model.RecordingStatus
 
@@ -20,6 +21,7 @@ class CallLifecycleServiceTest {
     fun `ending an open call publishes one terminal event to each participant`() {
         val store = FakeCallSessionStore(call())
         val published = mutableListOf<Pair<String, RealtimeEvent>>()
+        val terminatedShares = mutableListOf<Pair<String, Long>>()
         val service = CallLifecycleService(
             callSessionStore = store,
             pairStore = object : PairStore {
@@ -34,6 +36,9 @@ class CallLifecycleServiceTest {
             realtimeOutbox = RealtimeOutbox { recipientUserId, event, _ ->
                 published += recipientUserId to event
             },
+            screenShareTerminator = ScreenShareTerminator { callId, endedAt ->
+                terminatedShares += callId to endedAt
+            },
         )
 
         service.endOpenCall("call-1", endedAtEpochMillis = 20_000L)
@@ -43,6 +48,7 @@ class CallLifecycleServiceTest {
         assertEquals(setOf("user-a", "user-b"), published.map { it.first }.toSet())
         assertEquals(2, published.size)
         assertEquals(setOf(RealtimeEvent.CALL_ENDED), published.map { it.second.type }.toSet())
+        assertEquals(listOf("call-1" to 20_000L), terminatedShares)
     }
 }
 

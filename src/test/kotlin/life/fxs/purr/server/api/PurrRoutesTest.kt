@@ -923,6 +923,90 @@ class PurrRoutesTest {
         assertTrue(response.bodyAsText().contains("Unknown pairId"))
     }
 
+    @Test
+    fun `screen share routes issue scoped media credentials and revoke them on stop`() {
+        MediaMtxControlStub().use { mediaMtx ->
+            isolatedTestApplication(
+                mapOf(
+                    "purr.mediaMtx.enabled" to "true",
+                    "purr.mediaMtx.publicBaseUrl" to "https://stream.example.com",
+                    "purr.mediaMtx.apiBaseUrl" to mediaMtx.endpoint,
+                    "purr.mediaMtx.tokenSecret" to "screen-share-route-test-secret-at-least-32-bytes",
+                    "purr.mediaMtx.reconciliationIntervalMillis" to "10000",
+                    "purr.mediaMtx.srtPublicHost" to "stream.example.com",
+                ),
+            ) {
+                val userAToken = client.login("user-a", "pass-a")
+                val userBToken = client.login("user-b", "pass-b")
+                val session = client.post("/calls/session") {
+                    header(HttpHeaders.Authorization, "Bearer $userAToken")
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"pairId":"pair-demo","recordingConsent":true}""")
+                }
+                val callId = session.bodyAsText().requireJsonString("callId")
+                activateCall(callId)
+
+                val create = client.post("/calls/$callId/screen-share") {
+                    header(HttpHeaders.Authorization, "Bearer $userAToken")
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"source":"obs"}""")
+                }
+                val createBody = create.bodyAsText()
+                assertEquals(HttpStatusCode.Created, create.status)
+                assertEquals("no-store", create.headers[HttpHeaders.CacheControl])
+                assertTrue(createBody.contains("\"source\":\"obs\""))
+                assertTrue(createBody.contains("\"whip\":{\"url\":\"https://stream.example.com/"))
+                assertTrue(createBody.contains("/whep\""))
+                assertTrue(createBody.contains("\"srt\":{"))
+                val mediaPath = createBody.requireJsonString("mediaPath")
+                val publishToken = Regex(
+                    """\"whip\":\{[^}]*\"bearerToken\":\"([^\"]+)\"""",
+                ).find(createBody)?.groupValues?.get(1) ?: error("missing WHIP token in $createBody")
+
+                val publishAuth = client.post("/internal/mediamtx/auth") {
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """{"token":"$publishToken","action":"publish","protocol":"webrtc","path":"$mediaPath"}""",
+                    )
+                }
+                assertEquals(HttpStatusCode.NoContent, publishAuth.status)
+
+                val query = client.get("/calls/$callId/screen-share") {
+                    header(HttpHeaders.Authorization, "Bearer $userBToken")
+                }
+                val queryBody = query.bodyAsText()
+                assertEquals(HttpStatusCode.OK, query.status)
+                assertTrue(!queryBody.contains("\"publishing\":"), "viewer response must not contain publisher credentials")
+                val readToken = Regex(
+                    """\"playback\":\{[^}]*\"bearerToken\":\"([^\"]+)\"""",
+                ).find(queryBody)?.groupValues?.get(1) ?: error("missing WHEP token in $queryBody")
+                val readAuth = client.post("/internal/mediamtx/auth") {
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """{"token":"$readToken","action":"read","protocol":"webrtc","path":"$mediaPath"}""",
+                    )
+                }
+                assertEquals(HttpStatusCode.NoContent, readAuth.status)
+
+                val stop = client.delete("/calls/$callId/screen-share") {
+                    header(HttpHeaders.Authorization, "Bearer $userBToken")
+                }
+                assertEquals(HttpStatusCode.OK, stop.status)
+                assertTrue(stop.bodyAsText().contains("\"status\":\"stopped\""))
+                assertTrue(mediaMtx.addedPathBodies[mediaPath]?.contains("srtPublishPassphrase") == true)
+                assertTrue(mediaMtx.deletedPaths.contains(mediaPath))
+
+                val revokedAuth = client.post("/internal/mediamtx/auth") {
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """{"token":"$publishToken","action":"publish","protocol":"webrtc","path":"$mediaPath"}""",
+                    )
+                }
+                assertEquals(HttpStatusCode.Unauthorized, revokedAuth.status)
+            }
+        }
+    }
+
     private fun isolatedTestApplication(
         overrides: Map<String, String> = emptyMap(),
         block: suspend ApplicationTestBuilder.() -> Unit,
@@ -1018,6 +1102,24 @@ class PurrRoutesTest {
         }
     }
 
+    private fun activateCall(callId: String) {
+        val nowEpochMillis = System.currentTimeMillis()
+        DriverManager.getConnection(activeDatabaseUrl, "sa", "").use { connection ->
+            connection.prepareStatement(
+                """
+                    UPDATE call_sessions
+                    SET call_state = 'active', connected_at_epoch_millis = ?, updated_at_epoch_millis = ?
+                    WHERE call_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setLong(1, nowEpochMillis)
+                statement.setLong(2, nowEpochMillis)
+                statement.setString(3, callId)
+                check(statement.executeUpdate() == 1)
+            }
+        }
+    }
+
     private suspend fun HttpClient.postLiveKitWebhook(body: String) {
         val response = post("/webhooks/livekit") {
             contentType(ContentType.Application.Json)
@@ -1046,6 +1148,45 @@ private class AvatarHeadServer : AutoCloseable {
                 -1L,
             )
             exchange.close()
+        }
+        start()
+    }
+    val endpoint = "http://127.0.0.1:${server.address.port}"
+
+    override fun close() {
+        server.stop(0)
+    }
+}
+
+private class MediaMtxControlStub : AutoCloseable {
+    val addedPathBodies = java.util.concurrent.ConcurrentHashMap<String, String>()
+    val deletedPaths = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+        createContext("/") { exchange ->
+            val path = exchange.requestURI.path
+            val body = exchange.requestBody.bufferedReader().use { it.readText() }
+            val response = when {
+                path.startsWith("/v3/config/paths/add/") -> {
+                    addedPathBodies[path.substringAfterLast('/')] = body
+                    "{}"
+                }
+                path.startsWith("/v3/config/paths/delete/") -> {
+                    deletedPaths += path.substringAfterLast('/')
+                    "{}"
+                }
+                path == "/v3/paths/list" -> {
+                    val items = addedPathBodies.keys
+                        .filterNot(deletedPaths::contains)
+                        .joinToString(",") { """{"name":"$it","online":false}""" }
+                    """{"items":[$items],"pageCount":1}"""
+                }
+                path == "/v3/webrtc/sessions/list" || path == "/v3/srt/conns/list" ->
+                    """{"items":[],"pageCount":1}"""
+                else -> "{}"
+            }
+            exchange.responseHeaders.add("Content-Type", "application/json")
+            exchange.sendResponseHeaders(HttpStatusCode.OK.value, response.toByteArray().size.toLong())
+            exchange.responseBody.use { it.write(response.toByteArray()) }
         }
         start()
     }

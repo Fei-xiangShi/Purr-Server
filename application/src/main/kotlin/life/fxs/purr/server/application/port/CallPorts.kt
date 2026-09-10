@@ -212,12 +212,17 @@ data class RealtimeEvent(
     val pairId: String? = null,
     val callerUserId: String? = null,
     val startedAtEpochMillis: Long? = null,
+    val screenShareId: String? = null,
+    val screenShareStatus: String? = null,
+    val screenShareSource: String? = null,
+    val screenShareOwnerUserId: String? = null,
 ) {
     companion object {
         const val SNAPSHOT = "snapshot"
         const val PRESENCE_CHANGED = "presence_changed"
         const val CALL_STARTED = "call_started"
         const val CALL_ENDED = "call_ended"
+        const val SCREEN_SHARE_CHANGED = "screen_share_changed"
     }
 }
 

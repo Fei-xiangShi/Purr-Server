@@ -210,6 +210,51 @@ class PurrConfigLoaderTest {
         assertFailsWith<IllegalArgumentException> { PurrConfigLoader.validate(config) }
     }
 
+    @Test
+    fun `enabled production MediaMTX requires TLS and a non-placeholder signing secret`() {
+        val enabled = validProductionConfig().copy(
+            mediaMtx = MediaMtxConfig(
+                enabled = true,
+                publicBaseUrl = "https://stream.example.com",
+                apiBaseUrl = "http://mediamtx:9997",
+                tokenSecret = "a-strong-separate-mediamtx-token-secret",
+                srtPublicHost = "stream.example.com",
+            ),
+        )
+
+        PurrConfigLoader.validate(enabled)
+        assertFailsWith<IllegalArgumentException> {
+            PurrConfigLoader.validate(
+                enabled.copy(mediaMtx = enabled.mediaMtx.copy(publicBaseUrl = "http://stream.example.com")),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PurrConfigLoader.validate(
+                enabled.copy(
+                    mediaMtx = enabled.mediaMtx.copy(
+                        tokenSecret = "change-me-mediamtx-token-secret-32-bytes",
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `MediaMTX reconciliation and token bounds are validated`() {
+        val base = validProductionConfig()
+
+        assertFailsWith<IllegalArgumentException> {
+            PurrConfigLoader.validate(
+                base.copy(mediaMtx = base.mediaMtx.copy(reconciliationIntervalMillis = 100)),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PurrConfigLoader.validate(
+                base.copy(mediaMtx = base.mediaMtx.copy(readTokenTtlSeconds = 10)),
+            )
+        }
+    }
+
     private fun validProductionConfig() = PurrServerConfig(
         environment = RuntimeEnvironment.PRODUCTION,
         auth = AuthConfig(

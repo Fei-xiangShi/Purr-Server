@@ -118,6 +118,21 @@ purr:
     waitingTtlSeconds: 120
     emptyRoomGraceSeconds: 15
     batchSize: 100
+  mediaMtx:
+    enabled: false
+    publicBaseUrl: "http://localhost:8889"
+    apiBaseUrl: "http://localhost:9997"
+    tokenSecret: "dev-mediamtx-token-secret-change-me"
+    tokenIssuer: purr-server
+    tokenAudience: purr-mediamtx
+    publishTokenTtlSeconds: 600
+    readTokenTtlSeconds: 300
+    shareTtlSeconds: 43200
+    reconciliationIntervalMillis: 1000
+    reconciliationBatchSize: 100
+    requestTimeoutMillis: 3000
+    srtPublicHost: localhost
+    srtPublicPort: 8890
   rateLimit:
     provider: local
     limit: 10

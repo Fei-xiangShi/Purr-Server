@@ -31,6 +31,12 @@ import life.fxs.purr.server.model.RecordingDownloadDto
 import life.fxs.purr.server.model.RecordingResponseDto
 import life.fxs.purr.server.model.SelfProfile
 import life.fxs.purr.server.model.SessionResponseDto
+import life.fxs.purr.server.application.model.ScreenShareMediaEndpointResult
+import life.fxs.purr.server.application.model.ScreenShareResult
+import life.fxs.purr.server.model.ScreenShareDto
+import life.fxs.purr.server.model.ScreenShareMediaEndpointDto
+import life.fxs.purr.server.model.ScreenSharePublishingDto
+import life.fxs.purr.server.model.ScreenShareSrtDto
 
 internal fun AuthSessionResult.toDto() = AuthSessionDto(
     accessToken = accessToken,
@@ -159,4 +165,31 @@ private fun CallQualitySummaryResult.toDto() = CallQualitySummaryDto(
     averageDownlinkBitrateKbps = averageDownlinkBitrateKbps,
     networkTransports = networkTransports,
     codecs = codecs,
+)
+
+internal fun ScreenShareResult.toDto() = ScreenShareDto(
+    shareId = shareId,
+    callId = callId,
+    ownerUserId = ownerUserId,
+    source = source.wireValue,
+    status = status.wireValue,
+    mediaPath = mediaPath,
+    createdAtEpochMillis = createdAtEpochMillis,
+    expiresAtEpochMillis = expiresAtEpochMillis,
+    liveAtEpochMillis = liveAtEpochMillis,
+    stoppedAtEpochMillis = stoppedAtEpochMillis,
+    publishing = publishing?.let { publishing ->
+        ScreenSharePublishingDto(
+            whip = publishing.whip.toDto(),
+            srt = publishing.srt?.let { ScreenShareSrtDto(it.url, it.streamId, it.passphrase) },
+        )
+    },
+    playback = playback?.toDto(),
+    errorMessage = errorMessage,
+)
+
+private fun ScreenShareMediaEndpointResult.toDto() = ScreenShareMediaEndpointDto(
+    url = url,
+    bearerToken = bearerToken,
+    expiresAtEpochMillis = expiresAtEpochMillis,
 )

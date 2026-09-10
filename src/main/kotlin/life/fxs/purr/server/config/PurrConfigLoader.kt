@@ -309,6 +309,54 @@ object PurrConfigLoader {
                     "PURR_GOOGLE_DRIVE_RESTORE_WAIT_TIMEOUT_MILLIS",
                 ),
             ),
+            mediaMtx = MediaMtxConfig(
+                enabled = boolean(config, "purr.mediaMtx.enabled", "PURR_MEDIAMTX_ENABLED"),
+                publicBaseUrl = string(
+                    config,
+                    "purr.mediaMtx.publicBaseUrl",
+                    "PURR_MEDIAMTX_PUBLIC_BASE_URL",
+                ).trimEnd('/'),
+                apiBaseUrl = string(
+                    config,
+                    "purr.mediaMtx.apiBaseUrl",
+                    "PURR_MEDIAMTX_API_BASE_URL",
+                ).trimEnd('/'),
+                tokenSecret = string(config, "purr.mediaMtx.tokenSecret", "PURR_MEDIAMTX_TOKEN_SECRET"),
+                tokenIssuer = string(config, "purr.mediaMtx.tokenIssuer", "PURR_MEDIAMTX_TOKEN_ISSUER"),
+                tokenAudience = string(config, "purr.mediaMtx.tokenAudience", "PURR_MEDIAMTX_TOKEN_AUDIENCE"),
+                publishTokenTtlSeconds = long(
+                    config,
+                    "purr.mediaMtx.publishTokenTtlSeconds",
+                    "PURR_MEDIAMTX_PUBLISH_TOKEN_TTL_SECONDS",
+                ),
+                readTokenTtlSeconds = long(
+                    config,
+                    "purr.mediaMtx.readTokenTtlSeconds",
+                    "PURR_MEDIAMTX_READ_TOKEN_TTL_SECONDS",
+                ),
+                shareTtlSeconds = long(
+                    config,
+                    "purr.mediaMtx.shareTtlSeconds",
+                    "PURR_MEDIAMTX_SHARE_TTL_SECONDS",
+                ),
+                reconciliationIntervalMillis = long(
+                    config,
+                    "purr.mediaMtx.reconciliationIntervalMillis",
+                    "PURR_MEDIAMTX_RECONCILIATION_INTERVAL_MILLIS",
+                ),
+                reconciliationBatchSize = int(
+                    config,
+                    "purr.mediaMtx.reconciliationBatchSize",
+                    "PURR_MEDIAMTX_RECONCILIATION_BATCH_SIZE",
+                ),
+                requestTimeoutMillis = long(
+                    config,
+                    "purr.mediaMtx.requestTimeoutMillis",
+                    "PURR_MEDIAMTX_REQUEST_TIMEOUT_MILLIS",
+                ),
+                srtPublicHost = string(config, "purr.mediaMtx.srtPublicHost", "PURR_MEDIAMTX_SRT_PUBLIC_HOST"),
+                srtPublicPort = int(config, "purr.mediaMtx.srtPublicPort", "PURR_MEDIAMTX_SRT_PUBLIC_PORT"),
+            ),
         )
         validate(serverConfig)
         return serverConfig
@@ -563,6 +611,44 @@ object PurrConfigLoader {
         require(config.callReconciliation.batchSize in 1..1_000) {
             "Call reconciliation batch size must be between 1 and 1000"
         }
+        val mediaMtxPublicEndpoint = requireHttpEndpoint(
+            config.mediaMtx.publicBaseUrl,
+            "MediaMTX public endpoint",
+        )
+        requireHttpEndpoint(config.mediaMtx.apiBaseUrl, "MediaMTX API endpoint")
+        require(config.mediaMtx.tokenSecret.toByteArray().size >= 32) {
+            "MediaMTX token secret must contain at least 32 bytes"
+        }
+        require(config.mediaMtx.tokenIssuer.matches(Regex("[A-Za-z0-9._-]{1,128}"))) {
+            "MediaMTX token issuer contains invalid characters"
+        }
+        require(config.mediaMtx.tokenAudience.matches(Regex("[A-Za-z0-9._-]{1,128}"))) {
+            "MediaMTX token audience contains invalid characters"
+        }
+        require(config.mediaMtx.publishTokenTtlSeconds in 60..3_600) {
+            "MediaMTX publish token TTL must be between 60 and 3600 seconds"
+        }
+        require(config.mediaMtx.readTokenTtlSeconds in 30..3_600) {
+            "MediaMTX read token TTL must be between 30 and 3600 seconds"
+        }
+        require(config.mediaMtx.shareTtlSeconds in 300..86_400) {
+            "MediaMTX share TTL must be between 300 and 86400 seconds"
+        }
+        require(config.mediaMtx.reconciliationIntervalMillis in 250..10_000) {
+            "MediaMTX reconciliation interval must be between 250 and 10000 milliseconds"
+        }
+        require(config.mediaMtx.reconciliationBatchSize in 1..1_000) {
+            "MediaMTX reconciliation batch size must be between 1 and 1000"
+        }
+        require(config.mediaMtx.requestTimeoutMillis in 500..30_000) {
+            "MediaMTX request timeout must be between 500 and 30000 milliseconds"
+        }
+        require(config.mediaMtx.srtPublicHost.matches(Regex("[A-Za-z0-9.-]{1,253}"))) {
+            "MediaMTX SRT public host is invalid"
+        }
+        require(config.mediaMtx.srtPublicPort in 1..65_535) {
+            "MediaMTX SRT public port is invalid"
+        }
 
         if (config.environment == RuntimeEnvironment.PRODUCTION) {
             require(config.push.enabled) {
@@ -627,6 +713,14 @@ object PurrConfigLoader {
             }
             require(!config.liveKit.apiSecret.isPlaceholderSecret()) {
                 "Placeholder LiveKit API secret is forbidden in production"
+            }
+            if (config.mediaMtx.enabled) {
+                require(mediaMtxPublicEndpoint.scheme.equals("https", ignoreCase = true)) {
+                    "Production MediaMTX public endpoint must use https://"
+                }
+                require(!config.mediaMtx.tokenSecret.isPlaceholderSecret()) {
+                    "Placeholder MediaMTX token secret is forbidden in production"
+                }
             }
             config.auth.seedUsers.forEach { user ->
                 require(user.password.length >= MIN_PRODUCTION_PASSWORD_LENGTH) {

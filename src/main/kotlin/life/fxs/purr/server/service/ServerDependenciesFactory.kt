@@ -42,6 +42,7 @@ import life.fxs.purr.server.repository.UserRepository
 import life.fxs.purr.server.repository.PresenceRepository
 import life.fxs.purr.server.repository.WebhookInboxRepository
 import life.fxs.purr.server.repository.PushDeviceRepository
+import life.fxs.purr.server.repository.ScreenShareRepository
 import life.fxs.purr.server.realtime.RealtimeHub
 import life.fxs.purr.server.realtime.BrokeredRealtimeEventPublisher
 import life.fxs.purr.server.realtime.OutboxDispatcher
@@ -79,6 +80,13 @@ import life.fxs.purr.server.application.call.CallDetailQueryService
 import life.fxs.purr.server.application.call.CallTelemetryService
 import life.fxs.purr.server.application.call.RecordingCommandService
 import life.fxs.purr.server.application.call.RecordingQueryService
+import life.fxs.purr.server.application.call.ScreenShareAuthorizationService
+import life.fxs.purr.server.application.call.ScreenShareLifecycleService
+import life.fxs.purr.server.application.call.ScreenShareReconciliationService
+import life.fxs.purr.server.application.call.ScreenShareService
+import life.fxs.purr.server.mediamtx.JwtScreenShareTokenService
+import life.fxs.purr.server.mediamtx.MediaMtxHttpScreenShareProvider
+import life.fxs.purr.server.mediamtx.ScreenShareReconciliationWorker
 import org.mindrot.jbcrypt.BCrypt
 
 data class ServerDependencies(
@@ -100,6 +108,8 @@ data class ServerDependencies(
     val callTelemetryService: CallTelemetryService,
     val recordingCommandService: RecordingCommandService,
     val recordingQueryService: RecordingQueryService,
+    val screenShareService: ScreenShareService,
+    val screenShareAuthorizationService: ScreenShareAuthorizationService,
     val liveKitWebhookService: LiveKitWebhookService,
     val presenceStore: PresenceStore,
     val realtimeHub: RealtimeHub,
@@ -117,6 +127,7 @@ data class ServerDependencies(
     private val googleDriveResource: AutoCloseable?,
     private val recordingCommandDispatcher: RecordingCommandDispatcher,
     private val callRoomReconciliationWorker: CallRoomReconciliationWorker?,
+    private val screenShareReconciliationWorker: ScreenShareReconciliationWorker,
     private val outboxDispatcher: OutboxDispatcher,
     private val redisResources: RedisClientResources,
 ) : AutoCloseable {
@@ -126,9 +137,14 @@ data class ServerDependencies(
         if (!closed.compareAndSet(false, true)) return
         var failure: Throwable? = null
         try {
-            callRoomReconciliationWorker?.close()
+            screenShareReconciliationWorker.close()
         } catch (error: Throwable) {
             failure = error
+        }
+        try {
+            callRoomReconciliationWorker?.close()
+        } catch (error: Throwable) {
+            failure?.addSuppressed(error) ?: run { failure = error }
         }
         try {
             recordingCommandDispatcher.close()
@@ -223,6 +239,7 @@ object ServerDependenciesFactory {
         var recordingArchiveWorker: RecordingArchiveWorker? = null
         var recordingCommandDispatcher: RecordingCommandDispatcher? = null
         var callRoomReconciliationWorker: CallRoomReconciliationWorker? = null
+        var screenShareReconciliationWorker: ScreenShareReconciliationWorker? = null
         var outboxDispatcher: OutboxDispatcher? = null
 
         try {
@@ -239,6 +256,7 @@ object ServerDependenciesFactory {
             val callTelemetryRepository = CallTelemetryRepository()
             val presenceRepository = PresenceRepository()
             val pushDeviceRepository = PushDeviceRepository()
+            val screenShareRepository = ScreenShareRepository()
             val avatarCleanupRepository = AvatarCleanupRepository()
             val applicationTransaction = databaseResources.applicationTransaction
             val outboxRepository = OutboxRepository()
@@ -260,6 +278,8 @@ object ServerDependenciesFactory {
             }
             val authRateLimiter = AuthRateLimiterFactory.create(config.rateLimit, redisResources)
                 .also { authRateLimiterResource = it }
+            val screenShareTokenService = JwtScreenShareTokenService(config.mediaMtx)
+            val screenShareProvider = MediaMtxHttpScreenShareProvider(config.mediaMtx)
 
             val pushSender = config.push.enabled.takeIf { it }
                 ?.let { FcmPushNotificationSender(config.push) }
@@ -389,12 +409,55 @@ object ServerDependenciesFactory {
                 transaction = applicationTransaction,
                 recordingCommandProcessor = commandDispatcher,
             )
+            val screenShareLifecycleService = ScreenShareLifecycleService(
+                store = screenShareRepository,
+                callSessionStore = callSessionRepository,
+                pairService = pairService,
+                transaction = applicationTransaction,
+                realtimeOutbox = outboxRepository,
+            )
             val callLifecycleService = CallLifecycleService(
                 callSessionStore = callSessionRepository,
                 pairStore = pairBondRepository,
                 transaction = applicationTransaction,
                 realtimeOutbox = outboxRepository,
+                screenShareTerminator = screenShareLifecycleService,
             )
+            val screenShareService = ScreenShareService(
+                enabled = config.mediaMtx.enabled,
+                callAccessPolicy = callAccessPolicy,
+                pairService = pairService,
+                store = screenShareRepository,
+                provider = screenShareProvider,
+                tokenIssuer = screenShareTokenService,
+                srtPassphraseIssuer = screenShareTokenService,
+                lifecycleService = screenShareLifecycleService,
+                transaction = applicationTransaction,
+                realtimeOutbox = outboxRepository,
+                publicBaseUrl = config.mediaMtx.publicBaseUrl,
+                srtPublicHost = config.mediaMtx.srtPublicHost,
+                srtPublicPort = config.mediaMtx.srtPublicPort,
+                publishTokenTtlMillis = config.mediaMtx.publishTokenTtlSeconds * 1_000L,
+                readTokenTtlMillis = config.mediaMtx.readTokenTtlSeconds * 1_000L,
+                shareTtlMillis = config.mediaMtx.shareTtlSeconds * 1_000L,
+            )
+            val screenShareAuthorizationService = ScreenShareAuthorizationService(
+                enabled = config.mediaMtx.enabled,
+                tokenVerifier = screenShareTokenService,
+                screenShareStore = screenShareRepository,
+                callSessionStore = callSessionRepository,
+                pairService = pairService,
+            )
+            val mediaReconciliationWorker = ScreenShareReconciliationWorker(
+                config = config.mediaMtx,
+                service = ScreenShareReconciliationService(
+                    store = screenShareRepository,
+                    provider = screenShareProvider,
+                    lifecycleService = screenShareLifecycleService,
+                    batchSize = config.mediaMtx.reconciliationBatchSize,
+                ),
+            ).also { it.start() }
+            screenShareReconciliationWorker = mediaReconciliationWorker
             val roomParticipantReader = recordingAdapters.participantService
                 ?: config.callReconciliation.enabled.takeIf { it }
                     ?.let { LiveKitRoomParticipantService(config.liveKit) }
@@ -532,6 +595,8 @@ object ServerDependenciesFactory {
                 callTelemetryService = callTelemetryService,
                 recordingCommandService = recordingCommandService,
                 recordingQueryService = recordingQueryService,
+                screenShareService = screenShareService,
+                screenShareAuthorizationService = screenShareAuthorizationService,
                 liveKitWebhookService = liveKitWebhookService,
                 presenceStore = presenceRepository,
                 realtimeHub = realtimeHub,
@@ -549,10 +614,14 @@ object ServerDependenciesFactory {
                 googleDriveResource = googleDriveArchive,
                 recordingCommandDispatcher = commandDispatcher,
                 callRoomReconciliationWorker = reconciliationWorker,
+                screenShareReconciliationWorker = mediaReconciliationWorker,
                 outboxDispatcher = dispatcher,
                 redisResources = redisResources,
             )
         } catch (error: Throwable) {
+            runCatching { screenShareReconciliationWorker?.close() }
+                .exceptionOrNull()
+                ?.let(error::addSuppressed)
             runCatching { callRoomReconciliationWorker?.close() }
                 .exceptionOrNull()
                 ?.let(error::addSuppressed)
