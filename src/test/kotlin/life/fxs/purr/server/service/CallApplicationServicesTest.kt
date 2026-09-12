@@ -188,6 +188,20 @@ class CallApplicationServicesTest {
             assertEquals(ApplicationError.CONFLICT, conflict.error)
             assertEquals(CallState.ACTIVE, repository.find(callId)?.state)
 
+            // Local departure leaves a resumable room for either original direction.
+            listOf("user-a", "user-b").forEach { userId ->
+                val resumed = service.createSession(userId,
+                    CreateCallSessionCommand("pair-demo", expectedCallId = callId, recordingConsent = false))
+                assertEquals(callId, resumed.callId)
+                assertEquals(roomName, resumed.roomName)
+                assertEquals(false, resumed.createdByRequest)
+                val stale = assertFailsWith<ApplicationException> {
+                    service.createSession(userId,
+                        CreateCallSessionCommand("pair-demo", expectedCallId = "old-call", recordingConsent = false))
+                }
+                assertEquals(ApplicationError.CONFLICT, stale.error)
+            }
+
         } finally {
             (databaseResources.dataSource as? AutoCloseable)?.close()
         }

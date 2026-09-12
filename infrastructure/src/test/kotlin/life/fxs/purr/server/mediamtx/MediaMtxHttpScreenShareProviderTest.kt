@@ -36,7 +36,7 @@ class MediaMtxHttpScreenShareProviderTest {
             val add = stub.requests.first { it.path == "/v3/config/paths/add/${record.mediaPath}" }
             assertEquals("POST", add.method)
             assertTrue(add.body.contains("\"srtPublishPassphrase\":\"0123456789-passphrase\""))
-            assertTrue(add.body.contains("\"maxReaders\":2"))
+            assertTrue(add.body.contains("\"maxReaders\":8"))
             assertTrue(stub.requests.any { it.path == "/v3/webrtc/sessions/kick/webrtc-1" })
             assertTrue(stub.requests.none { it.path == "/v3/webrtc/sessions/kick/webrtc-other" })
             assertTrue(stub.requests.any { it.path == "/v3/srt/conns/kick/srt-1" })

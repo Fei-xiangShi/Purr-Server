@@ -29,7 +29,7 @@ class MediaMtxHttpScreenShareProvider(
             PathConfiguration(
                 source = "publisher",
                 overridePublisher = false,
-                maxReaders = 2,
+                maxReaders = 8,
                 record = false,
                 srtPublishPassphrase = srtPublishPassphrase,
             ),

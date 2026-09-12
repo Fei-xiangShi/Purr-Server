@@ -50,7 +50,7 @@ srtAddress: :8890
 pathDefaults:
   source: publisher
   overridePublisher: false
-  maxReaders: 2
+  maxReaders: 8
   record: false
 
 # Paths are created and removed by purr-server. Unknown paths are rejected.

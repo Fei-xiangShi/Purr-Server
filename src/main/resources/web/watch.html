@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>Purr · 直播</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#0c1110;color:#edf5ed}
+*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:flex;flex-direction:column}
+header{padding:20px max(24px,env(safe-area-inset-left));display:flex;align-items:center;gap:12px}
+.badge{font-size:12px;letter-spacing:.1em;background:#283d34;padding:5px 9px;border-radius:5px;color:#b5ebc6}
+main{width:min(1200px,100%);margin:auto;padding:0 20px 24px}h1{font-size:18px;margin:0;font-weight:600}
+#player{position:relative;background:#000;width:100%;aspect-ratio:16/9;border-radius:12px;overflow:hidden}
+video{width:100%;height:100%;object-fit:contain;display:block}#player:fullscreen{width:100vw;height:100dvh;border-radius:0;aspect-ratio:auto}#player:fullscreen video{object-fit:cover}
+#exit-fullscreen{display:none;position:absolute;top:max(16px,env(safe-area-inset-top));right:max(16px,env(safe-area-inset-right));background:#111b;z-index:2}#player:fullscreen #exit-fullscreen{display:block}
+#controls{display:flex;gap:10px;flex-wrap:wrap;padding:16px 0 10px}button{cursor:pointer;font:inherit;border:1px solid #4c6255;border-radius:8px;padding:10px 18px;background:#20372a;color:inherit}button:hover{background:#34533f}button:disabled{opacity:.45;cursor:default}
+#status{font-size:15px;min-height:24px;margin:8px 0;color:#c8decf}#quality,#note{font-size:13px;color:#8da596;line-height:1.7}footer{padding:0 24px 20px;font-size:12px;color:#64786b}
+</style>
+<header><h1>Purr</h1><span class="badge">LIVE</span></header>
+<main>
+<div id="player"><video id="video" controls playsinline muted autoplay></video><button id="exit-fullscreen">退出全屏</button></div>
+<div id="controls"><button id="play">开始观看</button><button id="stop" disabled>停止观看</button><button id="fullscreen">全屏</button></div>
+<p id="status" role="status" aria-live="polite">准备就绪</p>
+<p id="quality">连接后显示实际接收画质</p>
+<p id="note">原画直播 · H.265 / HEVC。请使用支持 HEVC WebRTC 的浏览器及设备。播放后可在播放器中开启声音。全屏保持比例并填满屏幕，画面边缘可能裁切。观看链接到期后需从 App 重新复制。</p>
+</main><footer>只接收直播画面与节目声音，不会加入语音通话。</footer>
+<script src="/watch.js" defer></script>
+</html>

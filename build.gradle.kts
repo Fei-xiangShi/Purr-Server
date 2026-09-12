@@ -10,7 +10,8 @@ plugins {
 
 allprojects {
     group = "life.fxs.purr"
-    version = providers.gradleProperty("PURR_SERVER_VERSION").orElse("0.1.2").get()
+    // Docker intentionally omits the workstation-specific gradle.properties.
+    version = providers.gradleProperty("PURR_SERVER_VERSION").orElse("0.1.3").get()
 
     plugins.withId("org.jetbrains.kotlin.jvm") {
         extensions.configure<KotlinJvmProjectExtension> {

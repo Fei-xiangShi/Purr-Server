@@ -58,7 +58,8 @@ class CallSessionService(
                     )
                 }
                 command.expectedCallId?.let { expectedCallId ->
-                    if (resolution.call.callId != expectedCallId || resolution.call.createdByUserId == userId) {
+                    // Both participants may explicitly resume the exact unfinished room.
+                    if (resolution.call.callId != expectedCallId) {
                         throw ApplicationException(
                             ApplicationError.CONFLICT,
                             "Incoming call is no longer active: $expectedCallId",

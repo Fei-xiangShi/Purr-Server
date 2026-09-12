@@ -830,7 +830,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `exact incoming call identity rejects caller replay and callee mismatch`() = isolatedTestApplication {
+    fun `exact room identity permits caller resume and rejects callee mismatch`() = isolatedTestApplication {
         val callerToken = client.login("user-a", "pass-a")
         val calleeToken = client.login("user-b", "pass-b")
         val created = client.post("/calls/session") {
@@ -852,7 +852,7 @@ class PurrRoutesTest {
                 """{"pairId":"pair-demo","expectedCallId":"$callId","recordingConsent":true}""",
             )
         }
-        assertEquals(HttpStatusCode.Conflict, callerReplay.status)
+        assertEquals(HttpStatusCode.OK, callerReplay.status)
 
         val calleeMismatch = client.post("/calls/session") {
             header("Authorization", "Bearer $calleeToken")
