@@ -41,6 +41,7 @@ class ScreenShareService(
     private val publishTokenTtlMillis: Long,
     private val readTokenTtlMillis: Long,
     private val shareTtlMillis: Long,
+    private val fixedSrtPassphrase: String? = null,
     private val nowProvider: () -> Instant = Instant::now,
     private val shareIdProvider: () -> String = { "share-${UUID.randomUUID()}" },
 ) {
@@ -65,7 +66,7 @@ class ScreenShareService(
             throw ApplicationException(ApplicationError.CONFLICT, "Call is no longer active or already has a screen share")
         }
 
-        val passphrase = srtPassphraseIssuer.issue(record.shareId)
+        val passphrase = fixedSrtPassphrase ?: srtPassphraseIssuer.issue(record.shareId)
         try {
             provider.ensurePath(record, passphrase)
         } catch (error: Throwable) {
@@ -91,6 +92,23 @@ class ScreenShareService(
         requireEnabled()
         callAccessPolicy.requireAccessibleCall(userId, callId)
         return store.findCurrentByCallId(callId)?.toResult(userId, includePublishing = false)
+    }
+
+    /** Possession of the per-share URL grants read access for the lifetime of that share. */
+    fun getBrowserPlayback(shareId: String): ScreenShareMediaEndpointResult {
+        requireEnabled()
+        val record = store.findByShareId(shareId)
+            ?: throw ApplicationException(ApplicationError.NOT_FOUND, "Screen share not found")
+        val now = nowProvider().toEpochMilli()
+        if (record.status !in setOf(ScreenShareStatus.AUTHORIZED, ScreenShareStatus.LIVE) ||
+            record.expiresAtEpochMillis / MILLIS_PER_SECOND <= now / MILLIS_PER_SECOND ||
+            callAccessPolicy.requireAccessibleCall(record.ownerUserId, record.callId).state != CallState.ACTIVE
+        ) {
+            throw ApplicationException(ApplicationError.NOT_FOUND, "Screen share has ended")
+        }
+        // The browser needs no account. Its short-lived token still uses the
+        // existing READ-only path/call authorization and immediate revocation.
+        return record.issueEndpoint(record.ownerUserId, ScreenSharePurpose.READ, readTokenTtlMillis, "whep")
     }
 
     fun stop(userId: String, callId: String, expectedShareId: String? = null): ScreenShareResult? {
@@ -142,7 +160,8 @@ class ScreenShareService(
         includePublishing: Boolean,
         srtPassphrase: String? = null,
     ): ScreenShareResult {
-        val credentialsAllowed = status == ScreenShareStatus.AUTHORIZED || status == ScreenShareStatus.LIVE
+        val credentialsAllowed = status in setOf(ScreenShareStatus.AUTHORIZED, ScreenShareStatus.LIVE) &&
+            expiresAtEpochMillis / MILLIS_PER_SECOND > nowProvider().toEpochMilli() / MILLIS_PER_SECOND
         val playback = if (credentialsAllowed) {
             issueEndpoint(userId, ScreenSharePurpose.READ, readTokenTtlMillis, "whep")
         } else {
@@ -179,6 +198,7 @@ class ScreenShareService(
             publishing = publishing,
             playback = playback,
             errorMessage = lastError,
+            watchUrl = if (credentialsAllowed) "$publicBaseUrl/watch/$shareId" else null,
         )
     }
 

@@ -440,6 +440,7 @@ object ServerDependenciesFactory {
                 publishTokenTtlMillis = config.mediaMtx.publishTokenTtlSeconds * 1_000L,
                 readTokenTtlMillis = config.mediaMtx.readTokenTtlSeconds * 1_000L,
                 shareTtlMillis = config.mediaMtx.shareTtlSeconds * 1_000L,
+                fixedSrtPassphrase = "purr-live-stream-key",
             )
             val screenShareAuthorizationService = ScreenShareAuthorizationService(
                 enabled = config.mediaMtx.enabled,
