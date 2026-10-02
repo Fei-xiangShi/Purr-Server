@@ -13,6 +13,7 @@ import life.fxs.purr.server.application.port.CallRoomEvent
 import life.fxs.purr.server.application.port.CallRoomEventType
 import life.fxs.purr.server.application.port.CallRoomParticipant
 import life.fxs.purr.server.application.port.CallRoomParticipantReader
+import life.fxs.purr.server.application.port.CallRoomReconciliationStore
 import life.fxs.purr.server.application.port.CallSessionStore
 import life.fxs.purr.server.application.port.EndCallResolution
 import life.fxs.purr.server.application.port.PairRecord
@@ -32,6 +33,78 @@ import life.fxs.purr.server.model.CallState
 import life.fxs.purr.server.model.RecordingStatus
 
 class CallRoomLifecycleServiceTest {
+    @Test
+    fun `disconnect webhooks preserve active room through the shared recovery grace`() {
+        var now = NOW
+        val harness = harness(
+            waitingCall().copy(state = CallState.ACTIVE),
+            emptyRoomGraceMillis = 15_000L,
+            nowProvider = { now },
+        )
+        val left = CallRoomEvent("left", CallRoomEventType.PARTICIPANT_LEFT, ROOM_NAME,
+            reportedParticipantCount = 0)
+        val finished = CallRoomEvent("finished", CallRoomEventType.ROOM_FINISHED, ROOM_NAME)
+
+        harness.service.handle(left)
+        now = NOW.plusSeconds(14)
+        harness.service.handle(finished)
+        assertEquals(CallState.ACTIVE, harness.calls.call.state)
+        assertEquals(NOW.toEpochMilli(), harness.calls.call.roomEmptySinceEpochMillis)
+        assertEquals(0, harness.outbox.size)
+        assertEquals(0, harness.recordingCommands.deletes.size)
+
+        now = NOW.plusSeconds(15)
+        harness.service.handle(finished)
+        assertEquals(CallState.ENDED, harness.calls.call.state)
+        assertEquals(1, harness.calls.endTransitions)
+    }
+
+    @Test
+    fun `one participant returning resets grace for the next outage`() {
+        var now = NOW
+        val harness = harness(
+            waitingCall().copy(state = CallState.ACTIVE),
+            emptyRoomGraceMillis = 15_000L,
+            nowProvider = { now },
+        )
+        val left = CallRoomEvent("left", CallRoomEventType.PARTICIPANT_LEFT, ROOM_NAME,
+            reportedParticipantCount = 0)
+        harness.service.handle(left)
+        now = NOW.plusSeconds(10)
+        harness.service.handle(joinedEvent(reportedParticipantCount = 1))
+        assertNull(harness.calls.call.roomEmptySinceEpochMillis)
+
+        now = NOW.plusSeconds(20)
+        harness.service.handle(left)
+        assertEquals(CallState.ACTIVE, harness.calls.call.state)
+        assertEquals(now.toEpochMilli(), harness.calls.call.roomEmptySinceEpochMillis)
+    }
+
+    @Test
+    fun `late room finished cannot terminate a room with a returned participant`() {
+        val harness = harness(
+            waitingCall().copy(state = CallState.ACTIVE,
+                roomEmptySinceEpochMillis = NOW.minusSeconds(30).toEpochMilli()),
+            emptyRoomGraceMillis = 15_000L,
+            participantReader = object : CallRoomParticipantReader {
+                override fun countActiveNonEgressParticipants(roomName: String) = 1
+                override fun countPresentNonEgressParticipants(roomName: String) = 1
+            },
+        )
+        harness.service.handle(CallRoomEvent("late", CallRoomEventType.ROOM_FINISHED, ROOM_NAME))
+        assertEquals(CallState.ACTIVE, harness.calls.call.state)
+        assertNull(harness.calls.call.roomEmptySinceEpochMillis)
+        assertEquals(0, harness.calls.endTransitions)
+    }
+
+    @Test
+    fun `participant left without an inventory or count is not proof of an empty room`() {
+        val harness = harness(waitingCall().copy(state = CallState.ACTIVE))
+        harness.service.handle(CallRoomEvent("unknown", CallRoomEventType.PARTICIPANT_LEFT, ROOM_NAME))
+        assertEquals(CallState.ACTIVE, harness.calls.call.state)
+        assertNull(harness.calls.call.roomEmptySinceEpochMillis)
+    }
+
     @Test
     fun `second participant activates and schedules recording after thirty seconds`() {
         val harness = harness(waitingCall(), durableCommands = true)
@@ -282,6 +355,8 @@ class CallRoomLifecycleServiceTest {
         initialCall: CallRecord,
         durableCommands: Boolean = false,
         participantReader: CallRoomParticipantReader? = null,
+        emptyRoomGraceMillis: Long = 0L,
+        nowProvider: () -> Instant = { NOW },
     ): LifecycleHarness {
         val calls = MutableCallStore(initialCall)
         val recordings = FakeRecordingStore(calls)
@@ -296,6 +371,8 @@ class CallRoomLifecycleServiceTest {
             realtimeOutbox = RealtimeOutbox { userId, event, _ -> outbox += userId to event },
         )
         val service = CallRoomLifecycleService(
+            reconciliationStore = calls,
+            emptyRoomGraceMillis = emptyRoomGraceMillis,
             callSessionStore = calls,
             recordingConsentStore = AlwaysConsented,
             pairStore = pairStore,
@@ -303,7 +380,7 @@ class CallRoomLifecycleServiceTest {
             recordingEnabled = true,
             consentPolicyVersion = "test-v1",
             participantReader = participantReader,
-            nowProvider = { NOW },
+            nowProvider = nowProvider,
             recordingCommandStore = recordingCommands,
             roomTerminator = NoOpRoomTerminator,
         )
@@ -494,7 +571,20 @@ class CallRecordingWebhookServiceTest {
     }
 }
 
-private class MutableCallStore(initialCall: CallRecord) : CallSessionStore {
+private class MutableCallStore(initialCall: CallRecord) : CallSessionStore, CallRoomReconciliationStore {
+    override fun findOpenCalls(limit: Int) = listOf(call).filter { it.state != CallState.ENDED }.take(limit)
+
+    override fun observeRoomEmpty(callId: String, observedAtEpochMillis: Long): CallRecord? {
+        if (call.callId != callId || call.state != CallState.ACTIVE) return null
+        call = call.copy(roomEmptySinceEpochMillis = call.roomEmptySinceEpochMillis ?: observedAtEpochMillis)
+        return call
+    }
+
+    override fun clearRoomEmptyObservation(callId: String): Boolean {
+        if (call.callId != callId) return false
+        call = call.copy(roomEmptySinceEpochMillis = null)
+        return true
+    }
     var call: CallRecord = initialCall
     var activationTransitions: Int = 0
     var endTransitions: Int = 0

@@ -38,4 +38,5 @@ data class ScreenShareResult(
     val publishing: ScreenSharePublishingResult?,
     val playback: ScreenShareMediaEndpointResult?,
     val errorMessage: String?,
+    val watchUrl: String? = null,
 )

@@ -15,7 +15,7 @@ that the peer has answered.
 | A cancels before connection | End presentation immediately, clean local resources, synchronize `/end` independently | The same conditional WAITING transition ends the invitation |
 | Either participant leaves an ACTIVE call | Disconnect only the local media, audio, Telecom and foreground service | `/end` acknowledges local departure; keep ACTIVE while another participant remains |
 | One participant remains after connection | Keep the room and microphone controls; show that the peer has left | No single-participant expiry; preserve the call and recording until the remaining person leaves |
-| Last participant leaves | Finish local cleanup regardless of server request latency | Empty-room webhook ends the call, stops recording and schedules room deletion |
+| Last participant leaves | Finish local cleanup regardless of server request latency | Empty-room webhook starts the recovery grace; continued emptiness ends the call, stops recording and schedules room deletion |
 | Process is killed or final webhook is lost | `onDestroy` and HTTP delivery are not guaranteed | Reconcile provider membership; ACTIVE rooms must be empty for the configured grace period before ending |
 | Provider reports the room is missing | End through normal server-status observation | A LiveKit `404 / not_found` is empty inventory; proxy 404, authentication errors and outages are failures, not empty rooms |
 
@@ -158,3 +158,20 @@ Release candidate: Android 0.2.14 (versionCode 25). Local automated validation
 and signed artifact verification do not substitute for two-device Android/FCM,
 Telecom interruption, MediaProjection, and OBS testing. Server code must be
 rolled out separately for the revised rejection and room lifecycle behavior.
+
+## Network-loss recovery (2026-10-02)
+
+An ACTIVE call's participant-left and room-finished webhooks use the same
+persisted empty-room grace clock as periodic reconciliation (15 seconds by
+default). A returning participant clears that clock. A delayed room-finished
+event checks current provider presence before ending a call; an unavailable
+inventory is not proof of absence. Missing participant-left counts are also
+unknown, not zero. With reconciliation explicitly disabled, webhook-only
+cleanup retains its immediate behavior.
+
+Both participants can request fresh credentials for the exact unfinished call
+during recovery. A continuously empty call still ends after the grace period;
+ended calls are never revived or silently replaced. Android revalidates an
+incoming/resume target before preparation and refreshes after a conflicting
+join, removing stale presentation state and explaining that a new call is needed.
+Server-ended tombstones apply to both active-room and incoming-prompt recovery.

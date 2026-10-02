@@ -62,6 +62,8 @@ class CallRoomReconciliationIntegrationTest {
                 realtimeOutbox = RealtimeOutbox { userId, event, _ -> notifications += userId to event },
             )
             val roomLifecycle = CallRoomLifecycleService(
+                reconciliationStore = calls,
+                emptyRoomGraceMillis = 0L,
                 callSessionStore = calls,
                 recordingConsentStore = NoConsentNeeded,
                 pairStore = pairStore,
@@ -162,6 +164,8 @@ class CallRoomReconciliationIntegrationTest {
             )
             val participantReader = EmptyRoomReader
             val roomLifecycle = CallRoomLifecycleService(
+                reconciliationStore = calls,
+                emptyRoomGraceMillis = 100L,
                 callSessionStore = calls,
                 recordingConsentStore = NoConsentNeeded,
                 pairStore = PairBondRepository(),
@@ -186,6 +190,32 @@ class CallRoomReconciliationIntegrationTest {
                 recordingCommandStore = commands,
             )
 
+            // Real provider webhooks must use the same persisted grace as polling.
+            roomLifecycle.handle(CallRoomEvent("offline", CallRoomEventType.PARTICIPANT_LEFT,
+                ROOM_NAME, reportedParticipantCount = 0))
+            roomLifecycle.handle(CallRoomEvent("finished", CallRoomEventType.ROOM_FINISHED, ROOM_NAME))
+            assertEquals(CallState.ACTIVE, calls.find(CALL_ID)?.state)
+            assertEquals(null, commands.findOpenForCall(CALL_ID, RecordingCommandType.STOP))
+            val pairService = PairService(PairBondRepository(), UserRepository())
+            val sessions = CallSessionService(
+                pairService = pairService,
+                callAccessPolicy = CallAccessPolicy(pairService, calls),
+                callSessionStore = calls,
+                recordingConsentStore = NoConsentNeeded,
+                mediaTokenIssuer = MediaTokenIssuer { _, _ -> "resumed-token" },
+                mediaServerWsUrl = "ws://localhost:7880",
+                recordingEnabled = false,
+                consentPolicyVersion = "test-v1",
+                transaction = resources.applicationTransaction,
+                realtimeOutbox = OutboxRepository(),
+                waitingCallTerminator = lifecycle,
+            )
+            listOf("user-a", "user-b").forEach { userId ->
+                val resumed = sessions.createSession(userId, CreateCallSessionCommand(PAIR_ID, CALL_ID, false))
+                assertEquals(CALL_ID, resumed.callId)
+                assertEquals(ROOM_NAME, resumed.roomName)
+                assertEquals(false, resumed.createdByRequest)
+            }
             reconciler.reconcileOnce(now)
             now = 1_100L
             reconciler.reconcileOnce(now)

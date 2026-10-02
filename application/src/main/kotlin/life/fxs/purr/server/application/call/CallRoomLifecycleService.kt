@@ -5,6 +5,7 @@ import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.application.port.CallRoomEvent
 import life.fxs.purr.server.application.port.CallRoomEventType
 import life.fxs.purr.server.application.port.CallRoomParticipantReader
+import life.fxs.purr.server.application.port.CallRoomReconciliationStore
 import life.fxs.purr.server.application.port.CallSessionStore
 import life.fxs.purr.server.application.port.CallTerminator
 import life.fxs.purr.server.application.port.CallRoomTerminator
@@ -42,19 +43,26 @@ class CallRoomLifecycleService(
     private val recordingCommandWakeup: RecordingCommandWakeup? = null,
     private val recordingCommandProcessor: RecordingCommandProcessor? = null,
     private val roomTerminator: CallRoomTerminator,
+    private val reconciliationStore: CallRoomReconciliationStore,
+    private val emptyRoomGraceMillis: Long,
 ) : CallRoomEventHandler, CallTerminator {
     override fun handle(event: CallRoomEvent) {
         val call = callSessionStore.findByRoomName(event.roomName) ?: return
         when (event.type) {
             CallRoomEventType.PARTICIPANT_JOINED -> maybeStartCallWhenReady(event, call)
             CallRoomEventType.PARTICIPANT_LEFT -> maybeEndCallWhenRoomEmpty(event, call)
-            CallRoomEventType.ROOM_FINISHED -> terminate(call.callId, nowProvider().toEpochMilli())
+            // Delivery can lag behind a reconnect that recreated the provider room.
+            CallRoomEventType.ROOM_FINISHED -> maybeEndCallWhenRoomEmpty(event, call)
         }
     }
 
     private fun maybeStartCallWhenReady(event: CallRoomEvent, call: CallRecord) {
         val participant = event.participant ?: return
         if (participant.isEgress || !participant.isActive) return
+        if (call.state == CallState.ACTIVE) {
+            // One returning participant is enough to keep an established call alive.
+            reconciliationStore.clearRoomEmptyObservation(call.callId)
+        }
 
         // The room count alone is not an identity proof. Resolve the pair
         // before activation and, when the provider exposes identities, require
@@ -124,11 +132,15 @@ class CallRoomLifecycleService(
         // Do not let a stale provider snapshot of zero end a call while the
         // webhook still reports a participant in the room.
         val presentParticipantCount = when {
-            readerPresentCount == null -> webhookPresentCount ?: 0
+            readerPresentCount == null -> webhookPresentCount
+                ?: if (event.type == CallRoomEventType.ROOM_FINISHED) 0 else return
             readerPresentCount == 0 && webhookPresentCount != null && webhookPresentCount > 0 -> webhookPresentCount
             else -> readerPresentCount
         }
-        if (presentParticipantCount != 0) return
+        if (presentParticipantCount != 0) {
+            reconciliationStore.clearRoomEmptyObservation(call.callId)
+            return
+        }
 
         // A provider adapter that can return identities gives us a stronger
         // signal than a potentially stale count. Do not end while either
@@ -141,9 +153,20 @@ class CallRoomLifecycleService(
                 participantIdentity(pair.userAId, call.callId),
                 participantIdentity(pair.userBId, call.callId),
             )
-            if (presentIdentities.any(expectedIdentities::contains)) return
+            if (presentIdentities.any(expectedIdentities::contains)) {
+                reconciliationStore.clearRoomEmptyObservation(call.callId)
+                return
+            }
         }
-        terminate(call.callId, nowProvider().toEpochMilli())
+        val now = nowProvider().toEpochMilli()
+        if (call.state == CallState.ACTIVE) {
+            // Webhooks and polling share a durable clock. A transient empty room
+            // must not invalidate credentials while the clients are reconnecting.
+            val observed = reconciliationStore.observeRoomEmpty(call.callId, now) ?: return
+            val emptySince = observed.roomEmptySinceEpochMillis ?: return
+            if (now - emptySince < emptyRoomGraceMillis) return
+        }
+        terminate(call.callId, now)
     }
 
     private fun participantIdentity(userId: String, callId: String): String = "$userId-$callId"

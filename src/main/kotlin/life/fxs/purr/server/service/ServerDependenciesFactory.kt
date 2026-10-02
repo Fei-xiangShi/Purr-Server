@@ -463,6 +463,10 @@ object ServerDependenciesFactory {
                 ?: config.callReconciliation.enabled.takeIf { it }
                     ?.let { LiveKitRoomParticipantService(config.liveKit) }
             val callRoomLifecycleService = CallRoomLifecycleService(
+                reconciliationStore = callSessionRepository,
+                emptyRoomGraceMillis = if (config.callReconciliation.enabled) {
+                    config.callReconciliation.emptyRoomGraceSeconds * 1_000L
+                } else 0L,
                 callSessionStore = callSessionRepository,
                 recordingConsentStore = callRecordingConsentRepository,
                 pairStore = pairBondRepository,
