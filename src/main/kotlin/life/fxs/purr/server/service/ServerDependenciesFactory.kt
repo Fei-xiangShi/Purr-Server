@@ -478,7 +478,6 @@ object ServerDependenciesFactory {
                 transaction = applicationTransaction,
                 recordingCommandWakeup = commandDispatcher,
                 recordingCommandProcessor = commandDispatcher,
-                roomTerminator = roomTerminator,
             )
             val callSessionService = CallSessionService(
                 waitingCallTerminator = callLifecycleService,
@@ -500,7 +499,6 @@ object ServerDependenciesFactory {
                 transaction = applicationTransaction,
                 recordingCommandWakeup = commandDispatcher,
                 recordingArchiveWakeup = archiveWorker,
-                roomTerminator = roomTerminator,
             )
             val reconciliationWorker = roomParticipantReader?.let { reader ->
                 CallRoomReconciliationWorker(
@@ -513,7 +511,6 @@ object ServerDependenciesFactory {
                         waitingTtlMillis = config.callReconciliation.waitingTtlSeconds * 1_000L,
                         emptyRoomGraceMillis = config.callReconciliation.emptyRoomGraceSeconds * 1_000L,
                         batchSize = config.callReconciliation.batchSize,
-                        roomTerminator = roomTerminator,
                         recordingCommandStore = recordingCommandRepository,
                     ),
                 ).also { it.start() }

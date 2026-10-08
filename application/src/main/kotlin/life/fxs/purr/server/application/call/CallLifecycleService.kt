@@ -2,6 +2,7 @@ package life.fxs.purr.server.application.call
 
 import life.fxs.purr.server.application.port.ApplicationTransaction
 import life.fxs.purr.server.application.port.CallSessionStore
+import life.fxs.purr.server.application.port.EndCallResolution
 import life.fxs.purr.server.application.port.PairStore
 import life.fxs.purr.server.application.port.RealtimeEvent
 import life.fxs.purr.server.application.port.RealtimeOutbox
@@ -30,7 +31,7 @@ class CallLifecycleService(
     private fun endCall(
         callId: String,
         endedAtEpochMillis: Long,
-        transition: () -> life.fxs.purr.server.application.port.EndCallResolution?,
+        transition: () -> EndCallResolution?,
     ) {
         transaction.execute {
             val resolution = transition()

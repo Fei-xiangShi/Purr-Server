@@ -48,6 +48,7 @@ interface CallSessionStore {
 
     fun findOrCreateActive(pairId: String, newCall: () -> CallRecord): ActiveCallResolution
 
+    /** Returns the activated call only when this request performed the WAITING -> ACTIVE transition. */
     fun activateIfWaiting(callId: String, connectedAtEpochMillis: Long): CallRecord?
 
     fun endIfWaiting(callId: String, endedAtEpochMillis: Long): EndCallResolution?

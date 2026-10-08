@@ -995,6 +995,27 @@ class PurrRoutesTest {
                 assertTrue(createBody.contains("/whep\""))
                 assertTrue(createBody.contains("\"srt\":{"))
                 val mediaPath = createBody.requireJsonString("mediaPath")
+                val watchUrl = createBody.requireJsonString("watchUrl")
+                val watchPath = java.net.URI(watchUrl).path
+                assertEquals("https://stream.example.com/watch/${createBody.requireJsonString("shareId")}", watchUrl)
+                val watchPage = client.get(watchPath)
+                assertEquals(HttpStatusCode.OK, watchPage.status)
+                assertTrue(watchPage.bodyAsText().contains("/watch.js"))
+                assertEquals("no-store", watchPage.headers[HttpHeaders.CacheControl])
+                val guestPlayback = client.get("$watchPath/playback")
+                assertEquals(HttpStatusCode.OK, guestPlayback.status)
+                assertEquals("no-store", guestPlayback.headers[HttpHeaders.CacheControl])
+                val guestBody = guestPlayback.bodyAsText()
+                assertTrue(!guestBody.contains("publishing") && !guestBody.contains("ownerUserId"))
+                val guestToken = guestBody.requireJsonString("bearerToken")
+                for ((action, expectedStatus) in listOf("read" to HttpStatusCode.NoContent, "publish" to HttpStatusCode.Unauthorized)) {
+                    val guestAuth = client.post("/internal/mediamtx/auth") {
+                        contentType(ContentType.Application.Json)
+                        setBody("""{"token":"$guestToken","action":"$action","protocol":"webrtc","path":"$mediaPath"}""")
+                    }
+                    assertEquals(expectedStatus, guestAuth.status)
+                }
+                assertEquals(HttpStatusCode.NotFound, client.get("/watch/share-missing/playback").status)
                 val publishToken = Regex(
                     """\"whip\":\{[^}]*\"bearerToken\":\"([^\"]+)\"""",
                 ).find(createBody)?.groupValues?.get(1) ?: error("missing WHIP token in $createBody")
@@ -1011,6 +1032,7 @@ class PurrRoutesTest {
                     header(HttpHeaders.Authorization, "Bearer $userBToken")
                 }
                 val queryBody = query.bodyAsText()
+                assertEquals(watchUrl, queryBody.requireJsonString("watchUrl"))
                 assertEquals(HttpStatusCode.OK, query.status)
                 assertTrue(!queryBody.contains("\"publishing\":"), "viewer response must not contain publisher credentials")
                 val readToken = Regex(
@@ -1041,6 +1063,12 @@ class PurrRoutesTest {
                 assertTrue(stop.bodyAsText().contains("\"status\":\"stopped\""))
                 assertTrue(mediaMtx.addedPathBodies[mediaPath]?.contains("srtPublishPassphrase") == true)
                 assertTrue(mediaMtx.deletedPaths.contains(mediaPath))
+                assertEquals(HttpStatusCode.NotFound, client.get("$watchPath/playback").status)
+                val revokedGuest = client.post("/internal/mediamtx/auth") {
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"token":"$guestToken","action":"read","protocol":"webrtc","path":"$mediaPath"}""")
+                }
+                assertEquals(HttpStatusCode.Unauthorized, revokedGuest.status)
 
                 val revokedAuth = client.post("/internal/mediamtx/auth") {
                     contentType(ContentType.Application.Json)

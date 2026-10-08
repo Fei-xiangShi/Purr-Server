@@ -97,7 +97,6 @@ class CallRoomReconciliationServiceTest {
         waitingTtlMillis = 1_000L,
         emptyRoomGraceMillis = 100L,
         batchSize = 10,
-        roomTerminator = NoOpRoomTerminator,
         recordingCommandStore = NoOpRecordingCommandStore,
     )
 
@@ -139,9 +138,6 @@ class CallRoomReconciliationServiceTest {
         }
     }
 
-    private object NoOpRoomTerminator : life.fxs.purr.server.application.port.CallRoomTerminator {
-        override fun deleteRoom(roomName: String) = Unit
-    }
 
     private object NoOpRecordingCommandStore : RecordingCommandStore {
         private fun command(type: RecordingCommandType, callId: String, roomName: String, at: Long) =

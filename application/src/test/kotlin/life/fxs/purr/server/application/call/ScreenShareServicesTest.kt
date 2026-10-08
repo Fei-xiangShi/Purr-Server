@@ -40,6 +40,40 @@ import life.fxs.purr.server.model.ScreenShareStatus
 
 class ScreenShareServicesTest {
     @Test
+    fun `one browser link works for both participants and refreshes expired read credentials`() {
+        val fixture = Fixture()
+        val created = fixture.service.create(USER_A, CALL_ID, CreateScreenShareCommand(ScreenShareSource.OBS))
+        assertEquals("https://stream.example/watch/$SHARE_ID", created.watchUrl)
+        assertEquals(created.watchUrl, fixture.service.get(USER_B, CALL_ID)?.watchUrl)
+        fixture.now += 300_000
+        val playback = fixture.service.getBrowserPlayback(SHARE_ID)
+        assertEquals("https://stream.example/screen-$SHARE_ID/whep", playback.url)
+        assertEquals("read-$USER_A", playback.bearerToken)
+        assertEquals(fixture.now + 30_000, playback.expiresAtEpochMillis)
+        assertEquals(created.watchUrl, fixture.service.get(USER_A, CALL_ID)?.watchUrl)
+        fixture.service.stop(USER_A, CALL_ID)
+        assertFailsWith<ApplicationException> { fixture.service.getBrowserPlayback(SHARE_ID) }
+        assertNull(fixture.service.get(USER_B, CALL_ID)?.watchUrl)
+    }
+
+    @Test
+    fun `browser rejects missing expired stopping and ended call shares`() {
+        val fixture = Fixture()
+        assertFailsWith<ApplicationException> { fixture.service.getBrowserPlayback("missing") }
+        fixture.service.create(USER_A, CALL_ID, CreateScreenShareCommand(ScreenShareSource.MOBILE))
+        fixture.now += 600_000
+        assertFailsWith<ApplicationException> { fixture.service.getBrowserPlayback(SHARE_ID) }
+        assertNull(fixture.service.get(USER_A, CALL_ID)?.watchUrl)
+        fixture.now = NOW
+        fixture.callStore.call = activeCall().copy(state = CallState.ENDED)
+        assertFailsWith<ApplicationException> { fixture.service.getBrowserPlayback(SHARE_ID) }
+        fixture.callStore.call = activeCall()
+        fixture.provider.cleanupFailure = IllegalStateException("offline")
+        fixture.service.stop(USER_A, CALL_ID)
+        assertFailsWith<ApplicationException> { fixture.service.getBrowserPlayback(SHARE_ID) }
+    }
+
+    @Test
     fun `stop during provider provisioning never returns publishing credentials`() {
         val fixture = Fixture()
         fixture.provider.onEnsure = { fixture.lifecycle.stop(CALL_ID, NOW) }
@@ -197,6 +231,7 @@ class ScreenShareServicesTest {
         ScreenShareAuthorizationRequest(token, null, action, protocol, path)
 
     private class Fixture {
+        var now = NOW
         val store = MemoryScreenShareStore()
         val callStore = FakeCallStore(activeCall())
         val pairService = PairService(FakePairStore, FakeUserReader)
@@ -226,7 +261,7 @@ class ScreenShareServicesTest {
             publishTokenTtlMillis = 60_000,
             readTokenTtlMillis = 30_000,
             shareTtlMillis = 600_000,
-            nowProvider = { Instant.ofEpochMilli(NOW) },
+            nowProvider = { Instant.ofEpochMilli(now) },
             shareIdProvider = { SHARE_ID },
         )
 
@@ -403,7 +438,7 @@ class ScreenShareServicesTest {
         }
     }
 
-    private class FakeCallStore(private var call: CallRecord) : CallSessionStore {
+    private class FakeCallStore(var call: CallRecord) : CallSessionStore {
         override fun find(callId: String) = call.takeIf { it.callId == callId }
         override fun findByRoomName(roomName: String) = call.takeIf { it.roomName == roomName }
         override fun findByRecordingId(recordingId: String) = call.takeIf { it.recordingId == recordingId }

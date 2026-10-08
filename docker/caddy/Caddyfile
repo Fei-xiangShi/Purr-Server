@@ -36,7 +36,7 @@
 }
 
 {$PURR_STREAM_DOMAIN} {
-    @watch_player path /watch /watch.js
+    @watch_player path /watch /watch/* /watch.js
     handle @watch_player {
         reverse_proxy purr-server:8080
     }

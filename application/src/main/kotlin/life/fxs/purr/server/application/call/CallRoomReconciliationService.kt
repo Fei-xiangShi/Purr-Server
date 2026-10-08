@@ -7,10 +7,8 @@ import life.fxs.purr.server.application.port.CallRoomEventType
 import life.fxs.purr.server.application.port.CallRoomParticipantReader
 import life.fxs.purr.server.application.port.CallRoomReconciliationStore
 import life.fxs.purr.server.application.port.WaitingCallTerminator
-import life.fxs.purr.server.application.port.CallRoomTerminator
 import life.fxs.purr.server.application.port.RecordingCommandStore
 import life.fxs.purr.server.model.CallState
-import life.fxs.purr.server.model.RecordingStatus
 
 /**
  * Periodic server-side convergence for calls whose provider/client process
@@ -26,7 +24,6 @@ class CallRoomReconciliationService(
     private val waitingTtlMillis: Long,
     private val emptyRoomGraceMillis: Long,
     private val batchSize: Int,
-    private val roomTerminator: CallRoomTerminator,
     private val recordingCommandStore: RecordingCommandStore,
 ) {
     fun reconcileOnce(nowEpochMillis: Long): CallRoomReconciliationSummary {
@@ -41,7 +38,7 @@ class CallRoomReconciliationService(
                 when (call.state) {
                     CallState.WAITING -> {
                         when {
-                            presentCount >= MIN_PARTICIPANTS_TO_START -> {
+                            presentCount >= MIN_PARTICIPANTS_TO_START_CALL -> {
                                 roomEventHandler.handle(
                                     CallRoomEvent(
                                         eventId = "reconcile-join-${call.callId}",
@@ -89,7 +86,7 @@ class CallRoomReconciliationService(
         }
         store.findEndedCallsForRoomCleanup(batchSize).forEach { call ->
             try {
-                if (call.recordingStatus !in setOf(RecordingStatus.STARTING, RecordingStatus.RECORDING, RecordingStatus.STOPPING)) {
+                if (!call.recordingStatus.isInFlight) {
                     recordingCommandStore.enqueueRoomDelete(
                         callId = call.callId,
                         roomName = call.roomName,
@@ -102,10 +99,6 @@ class CallRoomReconciliationService(
             }
         }
         return CallRoomReconciliationSummary(inspected, converged, failed)
-    }
-
-    private companion object {
-        const val MIN_PARTICIPANTS_TO_START = 2
     }
 }
 

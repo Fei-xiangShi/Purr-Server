@@ -8,6 +8,8 @@ import life.fxs.purr.server.application.port.EndCallResolution
 import life.fxs.purr.server.application.model.CallHistoryCursor
 import life.fxs.purr.server.db.table.CallSessionsTable
 import life.fxs.purr.server.db.table.PairBondsTable
+import life.fxs.purr.server.db.table.RecordingCommandsTable
+import life.fxs.purr.server.application.port.RecordingCommandType
 import life.fxs.purr.server.model.CallDurationPolicy
 import life.fxs.purr.server.model.CallState
 import life.fxs.purr.server.model.RecordingStatus
@@ -15,6 +17,8 @@ import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SortOrder
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.notInList
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.notInSubQuery
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.isNull
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.less
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.lessEq
@@ -79,7 +83,7 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
     }
 
     override fun activateIfWaiting(callId: String, connectedAtEpochMillis: Long): CallRecord? {
-        transaction {
+        val updatedRows = transaction {
             CallSessionsTable.update(
                 where = {
                     (CallSessionsTable.callId eq callId) and
@@ -93,7 +97,7 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
                 it[updatedAtEpochMillis] = connectedAtEpochMillis
             }
         }
-        return find(callId)
+        return if (updatedRows == 1) find(callId) else null
     }
 
     override fun endIfWaiting(callId: String, endedAtEpochMillis: Long): EndCallResolution? =
@@ -288,8 +292,18 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
     }
 
     override fun findEndedCallsForRoomCleanup(limit: Int): List<CallRecord> = transaction {
+        // Only calls that still need a delete command: without these filters the
+        // oldest ended calls would fill every batch forever and newer rooms would
+        // never be reached.
+        val alreadyScheduled = RecordingCommandsTable
+            .select(RecordingCommandsTable.callId)
+            .where { RecordingCommandsTable.commandType eq RecordingCommandType.DELETE_ROOM.name }
         CallSessionsTable.selectAll()
-            .where { CallSessionsTable.callState eq CallState.ENDED.wireValue }
+            .where {
+                (CallSessionsTable.callState eq CallState.ENDED.wireValue) and
+                    (CallSessionsTable.recordingStatus notInList inFlightRecordingStatuses) and
+                    (CallSessionsTable.callId notInSubQuery alreadyScheduled)
+            }
             .orderBy(CallSessionsTable.updatedAtEpochMillis to SortOrder.ASC)
             .limit(limit)
             .map { it.toCallRecord() }
@@ -471,6 +485,7 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
             RecordingStatus.STARTING.wireValue,
             RecordingStatus.STOPPING.wireValue,
         )
+        val inFlightRecordingStatuses = RecordingStatus.entries.filter { it.isInFlight }.map { it.wireValue }
         val openCallStates = listOf(CallState.WAITING.wireValue, CallState.ACTIVE.wireValue)
         val openCallStatesAsEnums = setOf(CallState.WAITING, CallState.ACTIVE)
         const val MAX_RECORDING_ERROR_LENGTH = 2_048

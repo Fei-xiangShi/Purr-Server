@@ -4,13 +4,30 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.server.application.call
 import io.ktor.server.response.respondText
+import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
+import life.fxs.purr.server.application.call.ScreenShareService
+import life.fxs.purr.server.coroutines.onBlockingIo
 
-/** Public player shell; media remains protected by the existing READ authorization. */
-fun Route.registerBrowserWatchRoutes() {
+/** Anyone holding a share URL can watch without signing in. */
+fun Route.registerBrowserWatchRoutes(screenShareService: ScreenShareService) {
+    registerBrowserWatchShell()
+    get("/watch/{shareId}/playback") {
+        call.response.headers.append(HttpHeaders.CacheControl, "no-store")
+        call.response.headers.append("Referrer-Policy", "no-referrer")
+        val result = onBlockingIo {
+            screenShareService.getBrowserPlayback(requireNotNull(call.parameters["shareId"]))
+        }
+        call.respond(result.toDto())
+    }
+}
+
+/** Static player shell; it carries no credentials and needs no application services. */
+internal fun Route.registerBrowserWatchShell() {
     val resources = mapOf(
         "/watch" to ("web/watch.html" to ContentType.Text.Html),
+        "/watch/{shareId}" to ("web/watch.html" to ContentType.Text.Html),
         "/watch.js" to ("web/watch.js" to ContentType.Application.JavaScript),
     )
     resources.forEach { (path, resource) ->

@@ -11,7 +11,7 @@ import kotlin.test.assertTrue
 
 class BrowserWatchRoutesTest {
     @Test fun `public player shell contains no credentials and disallows framing`() = testApplication {
-        application { routing { registerBrowserWatchRoutes() } }
+        application { routing { registerBrowserWatchShell() } }
         val page = client.get("/watch")
         assertEquals(HttpStatusCode.OK, page.status)
         assertEquals("no-store", page.headers["Cache-Control"])

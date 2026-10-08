@@ -27,6 +27,7 @@ data class ScreenShareDto(
     val publishing: ScreenSharePublishingDto? = null,
     val playback: ScreenShareMediaEndpointDto? = null,
     val errorMessage: String? = null,
+    val watchUrl: String? = null,
 )
 
 @Serializable

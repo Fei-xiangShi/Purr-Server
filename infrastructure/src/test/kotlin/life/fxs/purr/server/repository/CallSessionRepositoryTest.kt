@@ -3,6 +3,7 @@ package life.fxs.purr.server.repository
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import life.fxs.purr.server.application.model.CallHistoryCursor
 import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.config.DatabaseConfig
@@ -109,6 +110,54 @@ class CallSessionRepositoryTest {
 
             assertEquals(30_000L, ended.call.durationMillis)
             assertEquals(listOf("call-exact"), repository.findEndedByPairId("pair-1", 10, null).map { it.callId })
+        } finally {
+            (resources.dataSource as? AutoCloseable)?.close()
+        }
+    }
+
+    @Test
+    fun `activation reports only the request that performed the transition`() {
+        withDatabase("call-activation") { repository ->
+            repository.upsert(call("call-waiting", 1_000L, null, null).copy(state = CallState.WAITING))
+
+            val activated = assertNotNull(repository.activateIfWaiting("call-waiting", 2_000L))
+
+            assertEquals(CallState.ACTIVE, activated.state)
+            assertNull(repository.activateIfWaiting("call-waiting", 3_000L))
+            assertEquals(2_000L, repository.find("call-waiting")?.connectedAtEpochMillis)
+        }
+    }
+
+    @Test
+    fun `room cleanup sweep skips scheduled deletes and in-flight recordings`() {
+        withDatabase("call-room-cleanup") { repository ->
+            repository.upsert(call("call-deleted", 1_000L, 1_000L, 40_000L))
+            repository.upsert(call("call-recording", 2_000L, 2_000L, 41_000L)
+                .copy(recordingStatus = RecordingStatus.STOPPING))
+            repository.upsert(call("call-pending", 3_000L, 3_000L, 42_000L))
+            RecordingCommandRepository().enqueueRoomDelete("call-deleted", "room-call-deleted", 40_000L)
+
+            // A batch of one must still reach the newest call that needs cleanup.
+            assertEquals(listOf("call-pending"), repository.findEndedCallsForRoomCleanup(1).map { it.callId })
+        }
+    }
+
+    private fun withDatabase(name: String, block: (CallSessionRepository) -> Unit) {
+        val resources = DatabaseFactory(
+            DatabaseConfig(
+                jdbcUrl = "jdbc:h2:mem:$name-${System.nanoTime()};MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+                driverClassName = "org.h2.Driver",
+                username = "sa",
+                password = "",
+                maximumPoolSize = 2,
+            ),
+        ).connect()
+        try {
+            val users = UserRepository()
+            users.insertIfAbsent("user-a", "user-a", "pass-a", "A", null)
+            users.insertIfAbsent("user-b", "user-b", "pass-b", "B", null)
+            PairBondRepository().insertIfAbsent("pair-1", "user-a", "user-b", 1L)
+            block(CallSessionRepository())
         } finally {
             (resources.dataSource as? AutoCloseable)?.close()
         }

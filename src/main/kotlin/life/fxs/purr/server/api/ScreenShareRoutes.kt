@@ -20,7 +20,7 @@ import life.fxs.purr.server.model.ScreenShareSource
 import life.fxs.purr.server.service.ServerDependencies
 
 fun Route.registerScreenShareRoutes(dependencies: ServerDependencies) {
-    registerBrowserWatchRoutes()
+    registerBrowserWatchRoutes(dependencies.screenShareService)
     post("/internal/mediamtx/auth") {
         val request = call.receive<MediaMtxAuthRequestDto>()
         val allowed = onBlockingIo {

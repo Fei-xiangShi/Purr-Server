@@ -2,16 +2,17 @@
 (() => {
   const $ = id => document.getElementById(id);
   const video = $("video"), status = $("status"), quality = $("quality");
-  // Credentials stay in the fragment, which is never sent in HTTP requests/referrers.
+  // New links resolve fresh READ credentials on every attempt. Keep old app links working.
+  const sharePath = /^\/watch\/share-[a-zA-Z0-9-]+\/?$/.test(location.pathname)
+    ? location.pathname.replace(/\/$/, "") : null;
   const parameters = new URLSearchParams(location.hash.slice(1));
   const path = parameters.get("path"), token = parameters.get("token");
   const expires = Number(parameters.get("expires"));
   history.replaceState(null, "", location.pathname);
   let attempt = null;
-  const valid = /^\/screen-[a-zA-Z0-9-]+\/whep$/.test(path || "") &&
+  const legacyValid = /^\/screen-[a-zA-Z0-9-]+\/whep$/.test(path || "") &&
     /^[A-Za-z0-9._~-]+$/.test(token || "") && Number.isFinite(expires) && expires > 0;
-  const endpoint = valid ? new URL(path, location.origin) : null;
-  const headers = { Authorization: `Bearer ${token}` };
+  const valid = Boolean(sharePath || legacyValid);
   const current = a => attempt === a && !a.abort.signal.aborted;
   const delta = (value, old) => Number.isFinite(value) && Number.isFinite(old) && value >= old ? value - old : null;
 
@@ -32,7 +33,7 @@
     a.abort.abort();
     clearTimeout(a.timeout); clearTimeout(a.disconnect); clearInterval(a.statsTimer);
     a.pc?.close();
-    if (a.resource) fetch(a.resource, { method: "DELETE", headers, keepalive: true }).catch(() => {});
+    if (a.resource) fetch(a.resource, { method: "DELETE", headers: a.headers, keepalive: true }).catch(() => {});
     a.resource = null;
   }
 
@@ -45,7 +46,7 @@
 
   function fail(a, message) { if (current(a)) stop(message); }
   function httpError(code) {
-    if (code === 401 || code === 403) return "观看链接已失效，请从 App 重新复制。";
+    if (code === 401 || code === 403) return sharePath ? "暂时无法连接，请点击开始观看重试。" : "观看链接已失效，请从 App 重新复制。";
     if (code === 404) return "直播已停止或尚未开始。";
     if (code === 400 || code === 406) return "无法协商直播编码，请检查浏览器是否支持 HEVC WebRTC。";
     return `直播服务暂时不可用（${code}），请稍后重试；也可能已达到观看人数上限。`;
@@ -78,8 +79,8 @@
 
   async function start() {
     stop();
-    if (!valid) { status.textContent = "链接不完整，请从 Purr App 的通话工具复制网页观看链接。"; return; }
-    if (Date.now() >= expires) { status.textContent = "观看链接已到期，请从 App 重新复制。"; return; }
+    if (!valid) { status.textContent = "链接不完整，请从 Purr 通话页面复制观看链接。"; return; }
+    if (!sharePath && Date.now() >= expires) { status.textContent = "观看链接已到期，请从 App 重新复制。"; return; }
     if (!window.RTCPeerConnection || !window.isSecureContext) {
       status.textContent = "此环境无法播放 WebRTC 直播，请使用 HTTPS 和支持 WebRTC 的浏览器。"; return;
     }
@@ -91,6 +92,25 @@
     status.textContent = "正在连接直播…";
     a.timeout = setTimeout(() => fail(a, "连接超时，请检查网络、直播状态或稍后重试。"), 30000);
     try {
+      let endpoint = legacyValid ? new URL(path, location.origin) : null;
+      let readToken = token;
+      if (sharePath) {
+        const playback = await fetch(new URL(`${sharePath}/playback`, location.origin), {
+          method: "GET", cache: "no-store", credentials: "omit", signal: a.abort.signal,
+        });
+        if (!current(a)) return;
+        if (!playback.ok) throw new Error(httpError(playback.status));
+        const credentials = await playback.json();
+        if (!current(a)) return;
+        endpoint = new URL(credentials.url);
+        if (endpoint.origin !== location.origin ||
+            endpoint.pathname !== `/screen-${sharePath.split("/").pop()}/whep` || endpoint.search || endpoint.hash) {
+          throw new Error("直播服务返回了无效的播放地址。");
+        }
+        readToken = credentials.bearerToken;
+        if (!/^[A-Za-z0-9._~-]+$/.test(readToken || "")) throw new Error("无法获取播放信息，请重试。");
+      }
+      const headers = a.headers = { Authorization: `Bearer ${readToken}` };
       const options = await fetch(endpoint, { method: "OPTIONS", headers, signal: a.abort.signal });
       if (!options.ok) throw new Error(httpError(options.status));
       if (!current(a)) return;
@@ -134,9 +154,9 @@
         body: a.pc.localDescription.sdp, signal: a.abort.signal,
       });
       if (!response.ok) throw new Error(httpError(response.status));
-      const location = response.headers.get("Location");
-      if (!location) throw new Error("直播服务未返回会话地址。");
-      const resource = new URL(location, endpoint);
+      const resourceLocation = response.headers.get("Location");
+      if (!resourceLocation) throw new Error("直播服务未返回会话地址。");
+      const resource = new URL(resourceLocation, endpoint);
       if (resource.origin !== endpoint.origin || !resource.pathname.startsWith(endpoint.pathname + "/")) throw new Error("直播服务返回了无效的会话地址。");
       a.resource = resource;
       if (!current(a)) { release(a); return; }
@@ -161,5 +181,6 @@
   window.addEventListener("pagehide", () => stop());
   window.addEventListener("hashchange", () => { if (location.hash) location.reload(); });
   document.addEventListener("visibilitychange", () => { if (attempt && !document.hidden) attempt.lastFrameAt = performance.now(); });
-  if (!valid) { $("play").disabled = true; status.textContent = "请从 Purr App 的通话工具复制完整的网页观看链接。"; }
+  if (!valid) { $("play").disabled = true; status.textContent = "请从 Purr 通话页面复制完整的观看链接。"; }
+  else if (sharePath) start();
 })();

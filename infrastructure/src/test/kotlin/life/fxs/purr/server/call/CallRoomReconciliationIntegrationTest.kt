@@ -73,7 +73,6 @@ class CallRoomReconciliationIntegrationTest {
                 recordingCommandStore = commands,
                 transaction = resources.applicationTransaction,
                 nowProvider = { Instant.ofEpochMilli(2_000L) },
-                roomTerminator = NoOpRoomTerminator,
             )
             val callSessionService = CallSessionService(
                 waitingCallTerminator = lifecycle,
@@ -176,7 +175,6 @@ class CallRoomReconciliationIntegrationTest {
                 recordingCommandStore = commands,
                 transaction = resources.applicationTransaction,
                 nowProvider = { Instant.ofEpochMilli(now) },
-                roomTerminator = NoOpRoomTerminator,
             )
             val reconciler = CallRoomReconciliationService(
                 store = calls,
@@ -186,7 +184,6 @@ class CallRoomReconciliationIntegrationTest {
                 waitingTtlMillis = 1_000L,
                 emptyRoomGraceMillis = 100L,
                 batchSize = 10,
-                roomTerminator = NoOpRoomTerminator,
                 recordingCommandStore = commands,
             )
 
@@ -260,9 +257,6 @@ class CallRoomReconciliationIntegrationTest {
         override fun presentNonEgressParticipantIdentities(roomName: String): Set<String> = emptySet()
     }
 
-    private object NoOpRoomTerminator : life.fxs.purr.server.application.port.CallRoomTerminator {
-        override fun deleteRoom(roomName: String) = Unit
-    }
 
     private object NoConsentNeeded : RecordingConsentStore {
         override fun record(callId: String, userId: String, policyVersion: String, consentedAtEpochMillis: Long) = Unit

@@ -14,4 +14,9 @@ enum class RecordingStatus(val wireValue: String) {
     STOPPED("stopped"),
     FAILED("failed"),
     DELETED("deleted"),
+    ;
+
+    /** Provider egress may still be writing, so the room must outlive the call until it settles. */
+    val isInFlight: Boolean
+        get() = this == STARTING || this == RECORDING || this == STOPPING
 }

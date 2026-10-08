@@ -186,9 +186,10 @@ internal fun ScreenShareResult.toDto() = ScreenShareDto(
     },
     playback = playback?.toDto(),
     errorMessage = errorMessage,
+    watchUrl = watchUrl,
 )
 
-private fun ScreenShareMediaEndpointResult.toDto() = ScreenShareMediaEndpointDto(
+internal fun ScreenShareMediaEndpointResult.toDto() = ScreenShareMediaEndpointDto(
     url = url,
     bearerToken = bearerToken,
     expiresAtEpochMillis = expiresAtEpochMillis,

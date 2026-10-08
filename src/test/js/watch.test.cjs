@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const script = fs.readFileSync(path.join(__dirname, '../../main/resources/web/watch.js'), 'utf8');
 
-function harness({ expired = false, hevc = true, resource = '/screen-test/whep/session', fetchOverride } = {}) {
+function harness({ expired = false, hevc = true, share = false, resource = share ? '/screen-share-test/whep/session' : '/screen-test/whep/session', fetchOverride } = {}) {
   const nodes = new Map();
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, { textContent: '', disabled: false, srcObject: null, play: async () => {} });
@@ -13,7 +13,7 @@ function harness({ expired = false, hevc = true, resource = '/screen-test/whep/s
   };
   const calls = [], peers = [], timers = new Map();
   let timerId = 0;
-  const location = { pathname: '/watch', origin: 'https://stream.test', hash: `#path=%2Fscreen-test%2Fwhep&token=read-only-token&expires=${expired ? 1 : Date.now() + 300_000}` };
+  const location = { pathname: share ? '/watch/share-test' : '/watch', origin: 'https://stream.test', hash: share ? '' : `#path=%2Fscreen-test%2Fwhep&token=read-only-token&expires=${expired ? 1 : Date.now() + 300_000}` };
   class Peer {
     constructor(options) { this.options = options; this.iceGatheringState = 'complete'; this.transceivers = []; peers.push(this); }
     addTransceiver(kind, options) {
@@ -30,6 +30,7 @@ function harness({ expired = false, hevc = true, resource = '/screen-test/whep/s
   const fetch = async (url, options) => {
     calls.push({ url: String(url), ...options });
     if (fetchOverride) return fetchOverride(url, options, response);
+    if (options.method === 'GET') return { ...response(200), json: async () => ({ url: 'https://stream.test/screen-share-test/whep', bearerToken: 'fresh-read-token' }) };
     return response(options.method === 'POST' ? 201 : 204, resource);
   };
   vm.runInNewContext(script, {
@@ -44,6 +45,58 @@ function harness({ expired = false, hevc = true, resource = '/screen-test/whep/s
   });
   return { node, calls, peers, location };
 }
+
+const settled = () => new Promise(resolve => setImmediate(resolve));
+
+test('share URL autoplays without login or fragment and remains refreshable', async () => {
+  const h = harness({ share: true }); await settled();
+  assert.equal(h.calls[0].url, 'https://stream.test/watch/share-test/playback');
+  assert.equal(h.calls[0].credentials, 'omit');
+  assert.equal(h.calls[0].cache, 'no-store');
+  assert.equal(h.calls[0].headers, undefined);
+  assert.equal(h.location.pathname, '/watch/share-test');
+  assert.equal(h.peers[0].answer.sdp, 'test-answer');
+  assert.equal(h.calls.find(c => c.method === 'POST').headers.Authorization, 'Bearer fresh-read-token');
+  const refreshed = harness({ share: true }); await settled();
+  assert.equal(refreshed.peers[0].answer.sdp, 'test-answer');
+});
+
+test('retry refreshes credentials while old session cleanup uses its own token', async () => {
+  let issued = 0;
+  const h = harness({ share: true, fetchOverride: (_, options, response) => options.method === 'GET'
+    ? { ...response(200), json: async () => ({ url: 'https://stream.test/screen-share-test/whep', bearerToken: `read-${++issued}` }) }
+    : response(201, '/screen-share-test/whep/session') });
+  await settled(); await h.node('play').onclick();
+  assert.equal(issued, 2);
+  assert.equal(h.calls.find(c => c.method === 'DELETE').headers.Authorization, 'Bearer read-1');
+  assert.equal(h.calls.filter(c => c.method === 'POST').at(-1).headers.Authorization, 'Bearer read-2');
+});
+
+test('ended share needs no account and gives an ended message without signaling', async () => {
+  const h = harness({ share: true, fetchOverride: (_, __, response) => response(404) });
+  await settled();
+  assert.equal(h.peers.length, 0); assert.match(h.node('status').textContent, /已停止/);
+  assert.deepEqual(h.calls.map(c => c.method), ['GET']);
+});
+
+test('stop during link resolution ignores late credentials', async () => {
+  let complete;
+  const h = harness({ share: true, fetchOverride: (_, __, response) => new Promise(resolve => {
+    complete = () => resolve({ ...response(200), json: async () => ({ url: 'https://stream.test/screen-share-test/whep', bearerToken: 'late' }) });
+  }) });
+  h.node('stop').onclick(); complete(); await settled();
+  assert.equal(h.peers.length, 0); assert.equal(h.calls.length, 1);
+  assert.match(h.node('status').textContent, /已停止/);
+});
+
+test('resolved foreign media URL never receives read credentials', async () => {
+  const h = harness({ share: true, fetchOverride: (_, __, response) => ({
+    ...response(200), json: async () => ({ url: 'https://other.test/screen-share-test/whep', bearerToken: 'private' }),
+  }) });
+  await settled();
+  assert.equal(h.calls.length, 1); assert.equal(h.peers.length, 0);
+  assert.match(h.node('status').textContent, /无效/);
+});
 
 test('expired link never starts signaling', async () => {
   const h = harness({ expired: true }); await h.node('play').onclick();

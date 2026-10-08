@@ -26,7 +26,6 @@ import life.fxs.purr.server.application.port.RecordingCommandRecord
 import life.fxs.purr.server.application.port.RecordingCommandState
 import life.fxs.purr.server.application.port.RecordingCommandStore
 import life.fxs.purr.server.application.port.RecordingCommandType
-import life.fxs.purr.server.application.port.RecordingController
 import life.fxs.purr.server.application.port.RecordingRecord
 import life.fxs.purr.server.application.port.RecordingArchiveWakeup
 import life.fxs.purr.server.model.CallState
@@ -107,7 +106,7 @@ class CallRoomLifecycleServiceTest {
 
     @Test
     fun `second participant activates and schedules recording after thirty seconds`() {
-        val harness = harness(waitingCall(), durableCommands = true)
+        val harness = harness(waitingCall())
         val event = joinedEvent(reportedParticipantCount = 2)
 
         harness.service.handle(event)
@@ -116,11 +115,27 @@ class CallRoomLifecycleServiceTest {
         assertEquals(CallState.ACTIVE, harness.calls.call.state)
         assertEquals(NOW.toEpochMilli(), harness.calls.call.connectedAtEpochMillis)
         assertEquals(1, harness.calls.activationTransitions)
-        assertEquals(0, harness.calls.recordingClaims)
-        assertEquals(0, harness.recordingController.startCalls)
         assertEquals(RecordingStatus.IDLE, harness.calls.call.recordingStatus)
         assertEquals(1, harness.recordingCommands.starts.size)
         assertEquals(NOW.plusSeconds(30).toEpochMilli(), harness.recordingCommands.starts.single().availableAtEpochMillis)
+    }
+
+    @Test
+    fun `reconnect into an active call does not reschedule recording`() {
+        val harness = harness(
+            waitingCall().copy(
+                state = CallState.ACTIVE,
+                connectedAtEpochMillis = NOW.minusSeconds(60).toEpochMilli(),
+                roomEmptySinceEpochMillis = NOW.minusSeconds(5).toEpochMilli(),
+            ),
+        )
+
+        harness.service.handle(joinedEvent(reportedParticipantCount = 2))
+
+        assertEquals(CallState.ACTIVE, harness.calls.call.state)
+        assertNull(harness.calls.call.roomEmptySinceEpochMillis)
+        assertEquals(0, harness.calls.activationTransitions)
+        assertEquals(0, harness.recordingCommands.startRequests)
     }
 
     @Test
@@ -131,7 +146,6 @@ class CallRoomLifecycleServiceTest {
 
         assertEquals(CallState.WAITING, harness.calls.call.state)
         assertNull(harness.calls.call.connectedAtEpochMillis)
-        assertEquals(0, harness.recordingController.startCalls)
     }
 
     @Test
@@ -148,7 +162,6 @@ class CallRoomLifecycleServiceTest {
         harness.service.handle(joinedEvent(reportedParticipantCount = 2))
 
         assertEquals(CallState.WAITING, harness.calls.call.state)
-        assertEquals(0, harness.recordingController.startCalls)
     }
 
     @Test
@@ -169,14 +182,12 @@ class CallRoomLifecycleServiceTest {
 
         assertEquals(CallState.WAITING, harness.calls.call.state)
         assertEquals(0, harness.calls.activationTransitions)
-        assertEquals(0, harness.recordingController.startCalls)
     }
 
     @Test
     fun `both call scoped identities activate the call`() {
         val harness = harness(
             waitingCall(),
-            durableCommands = true,
             participantReader = object : CallRoomParticipantReader {
                 override fun countActiveNonEgressParticipants(roomName: String): Int = 2
 
@@ -191,7 +202,6 @@ class CallRoomLifecycleServiceTest {
 
         assertEquals(CallState.ACTIVE, harness.calls.call.state)
         assertEquals(1, harness.calls.activationTransitions)
-        assertEquals(0, harness.recordingController.startCalls)
         assertEquals(1, harness.recordingCommands.starts.size)
     }
 
@@ -353,16 +363,13 @@ class CallRoomLifecycleServiceTest {
 
     private fun harness(
         initialCall: CallRecord,
-        durableCommands: Boolean = false,
         participantReader: CallRoomParticipantReader? = null,
         emptyRoomGraceMillis: Long = 0L,
         nowProvider: () -> Instant = { NOW },
     ): LifecycleHarness {
         val calls = MutableCallStore(initialCall)
-        val recordings = FakeRecordingStore(calls)
         val pairStore = FakePairStore
         val outbox = mutableListOf<Pair<String, RealtimeEvent>>()
-        val recordingController = FakeRecordingController()
         val recordingCommands = FakeRecordingCommandStore()
         val lifecycle = CallLifecycleService(
             callSessionStore = calls,
@@ -382,9 +389,8 @@ class CallRoomLifecycleServiceTest {
             participantReader = participantReader,
             nowProvider = nowProvider,
             recordingCommandStore = recordingCommands,
-            roomTerminator = NoOpRoomTerminator,
         )
-        return LifecycleHarness(service, calls, recordingController, recordingCommands, outbox)
+        return LifecycleHarness(service, calls, recordingCommands, outbox)
     }
 
     private fun joinedEvent(reportedParticipantCount: Int) = CallRoomEvent(
@@ -398,7 +404,6 @@ class CallRoomLifecycleServiceTest {
     private data class LifecycleHarness(
         val service: CallRoomLifecycleService,
         val calls: MutableCallStore,
-        val recordingController: FakeRecordingController,
         val recordingCommands: FakeRecordingCommandStore,
         val outbox: List<Pair<String, RealtimeEvent>>,
     )
@@ -408,13 +413,14 @@ private class FakeRecordingCommandStore : RecordingCommandStore {
     val starts = mutableListOf<RecordingCommandRecord>()
     val stops = mutableListOf<RecordingCommandRecord>()
     val deletes = mutableListOf<RecordingCommandRecord>()
+    var startRequests: Int = 0
 
     override fun enqueueStart(
         callId: String,
         roomName: String,
         requestedAtEpochMillis: Long,
         availableAtEpochMillis: Long,
-    ): RecordingCommandRecord = starts.firstOrNull { it.callId == callId } ?: RecordingCommandRecord(
+    ): RecordingCommandRecord = also { startRequests++ }.starts.firstOrNull { it.callId == callId } ?: RecordingCommandRecord(
         commandId = "start-$callId",
         idempotencyKey = "start:$callId",
         callId = callId,
@@ -519,7 +525,6 @@ class CallRecordingWebhookServiceTest {
             callSessionStore = calls,
             callRecordingStore = FakeRecordingStore(calls),
             recordingCommandStore = FakeRecordingCommandStore(),
-            roomTerminator = NoOpRoomTerminator,
             recordingArchiveWakeup = RecordingArchiveWakeup { wakeups++ },
         )
 
@@ -547,14 +552,11 @@ class CallRecordingWebhookServiceTest {
                 recordingId = "recording-1",
             ),
         )
-        val recordings = FakeRecordingStore(calls)
-        val controller = FakeRecordingController()
         val commandStore = FakeRecordingCommandStore()
         val service = CallRecordingWebhookService(
             callSessionStore = calls,
-            callRecordingStore = recordings,
+            callRecordingStore = FakeRecordingStore(calls),
             recordingCommandStore = commandStore,
-            roomTerminator = NoOpRoomTerminator,
             nowProvider = { NOW },
         )
         val callback = ProviderRecordingResult(
@@ -588,7 +590,6 @@ private class MutableCallStore(initialCall: CallRecord) : CallSessionStore, Call
     var call: CallRecord = initialCall
     var activationTransitions: Int = 0
     var endTransitions: Int = 0
-    var recordingClaims: Int = 0
 
     override fun find(callId: String): CallRecord? = call.takeIf { it.callId == callId }
 
@@ -603,15 +604,15 @@ private class MutableCallStore(initialCall: CallRecord) : CallSessionStore, Call
         ActiveCallResolution(call, created = false)
 
     override fun activateIfWaiting(callId: String, connectedAtEpochMillis: Long): CallRecord? {
-        if (call.callId != callId) return null
-        if (call.state == CallState.WAITING && call.connectedAtEpochMillis == null) {
-            activationTransitions++
-            call = call.copy(
-                state = CallState.ACTIVE,
-                connectedAtEpochMillis = connectedAtEpochMillis,
-                updatedAtEpochMillis = connectedAtEpochMillis,
-            )
+        if (call.callId != callId || call.state != CallState.WAITING || call.connectedAtEpochMillis != null) {
+            return null
         }
+        activationTransitions++
+        call = call.copy(
+            state = CallState.ACTIVE,
+            connectedAtEpochMillis = connectedAtEpochMillis,
+            updatedAtEpochMillis = connectedAtEpochMillis,
+        )
         return call
     }
 
@@ -635,7 +636,6 @@ private class MutableCallStore(initialCall: CallRecord) : CallSessionStore, Call
         if (call.recordingStatus !in setOf(RecordingStatus.IDLE, RecordingStatus.STOPPED, RecordingStatus.FAILED)) {
             return null
         }
-        recordingClaims++
         call = call.copy(
             recordingStatus = RecordingStatus.STARTING,
             recordingId = null,
@@ -688,40 +688,6 @@ private class FakeRecordingStore(
     override fun findByCallId(callId: String): List<RecordingRecord> = history.values.filter { it.callId == callId }
 
     override fun findByRecordingId(recordingId: String): RecordingRecord? = history[recordingId]
-}
-
-private class FakeRecordingController : RecordingController {
-    var startCalls: Int = 0
-    var stopCalls: Int = 0
-
-    override fun startRecording(callId: String, roomName: String, operationId: String): ProviderRecordingResult {
-        startCalls++
-        return ProviderRecordingResult(
-            status = RecordingStatus.RECORDING,
-            recordingId = "recording-1",
-            updatedAtEpochMillis = NOW.plusMillis(1).toEpochMilli(),
-            startedAtEpochMillis = NOW.toEpochMilli(),
-        )
-    }
-
-    override fun stopRecording(
-        callId: String,
-        roomName: String,
-        currentRecordingId: String?,
-        operationId: String,
-    ): ProviderRecordingResult {
-        stopCalls++
-        return ProviderRecordingResult(
-            status = RecordingStatus.STOPPED,
-            recordingId = currentRecordingId,
-            updatedAtEpochMillis = NOW.plusMillis(2).toEpochMilli(),
-            endedAtEpochMillis = NOW.plusMillis(2).toEpochMilli(),
-        )
-    }
-}
-
-private object NoOpRoomTerminator : life.fxs.purr.server.application.port.CallRoomTerminator {
-    override fun deleteRoom(roomName: String) = Unit
 }
 
 private object FakePairStore : PairStore {

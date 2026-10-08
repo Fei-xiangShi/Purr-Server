@@ -8,7 +8,6 @@ import life.fxs.purr.server.application.port.CallRoomParticipantReader
 import life.fxs.purr.server.application.port.CallRoomReconciliationStore
 import life.fxs.purr.server.application.port.CallSessionStore
 import life.fxs.purr.server.application.port.CallTerminator
-import life.fxs.purr.server.application.port.CallRoomTerminator
 import life.fxs.purr.server.application.port.PairStore
 import life.fxs.purr.server.application.port.RecordingConsentStore
 import life.fxs.purr.server.application.port.RecordingCommandProcessor
@@ -18,7 +17,6 @@ import life.fxs.purr.server.application.port.ApplicationTransaction
 import life.fxs.purr.server.application.port.CallRoomEventHandler
 import life.fxs.purr.server.model.CallDurationPolicy
 import life.fxs.purr.server.model.CallState
-import life.fxs.purr.server.model.RecordingStatus
 
 /**
  * Application use case for provider-neutral room lifecycle events.
@@ -42,7 +40,6 @@ class CallRoomLifecycleService(
     private val transaction: ApplicationTransaction = ImmediateCallRoomTransaction,
     private val recordingCommandWakeup: RecordingCommandWakeup? = null,
     private val recordingCommandProcessor: RecordingCommandProcessor? = null,
-    private val roomTerminator: CallRoomTerminator,
     private val reconciliationStore: CallRoomReconciliationStore,
     private val emptyRoomGraceMillis: Long,
 ) : CallRoomEventHandler, CallTerminator {
@@ -61,8 +58,11 @@ class CallRoomLifecycleService(
         if (participant.isEgress || !participant.isActive) return
         if (call.state == CallState.ACTIVE) {
             // One returning participant is enough to keep an established call alive.
+            // A reconnect into an established call is not a new activation.
             reconciliationStore.clearRoomEmptyObservation(call.callId)
+            return
         }
+        if (call.state != CallState.WAITING) return
 
         // The room count alone is not an identity proof. Resolve the pair
         // before activation and, when the provider exposes identities, require
@@ -89,34 +89,36 @@ class CallRoomLifecycleService(
             ?.takeIf { it > 0 }
             ?: event.reportedParticipantCount
             ?: 0
-        if (activeParticipantCount < MIN_PARTICIPANTS_TO_START) return
+        if (activeParticipantCount < MIN_PARTICIPANTS_TO_START_CALL) return
 
-        val activeCall = callSessionStore.activateIfWaiting(
-            callId = call.callId,
-            connectedAtEpochMillis = nowProvider().toEpochMilli(),
-        )?.takeIf { it.state == CallState.ACTIVE } ?: return
-
-        // Activation is a call concern even when recording is disabled.
-        if (!recordingEnabled) return
-
-        if (!recordingConsentStore.hasAllConsents(
-                callId = activeCall.callId,
-                userIds = setOf(pair.userAId, pair.userBId),
-                policyVersion = consentPolicyVersion,
-            )
-        ) {
-            return
-        }
-
-        val connectedAt = activeCall.connectedAtEpochMillis ?: return
-        transaction.execute {
+        // Activation and the durable recording start commit together, so a crash between
+        // them cannot leave an active call that never records. Only the caller that won
+        // the WAITING -> ACTIVE transition schedules recording.
+        val recordingScheduled = transaction.execute {
+            val activeCall = callSessionStore.activateIfWaiting(
+                callId = call.callId,
+                connectedAtEpochMillis = nowProvider().toEpochMilli(),
+            ) ?: return@execute false
+            // Activation is a call concern even when recording is disabled.
+            if (!recordingEnabled) return@execute false
+            if (!recordingConsentStore.hasAllConsents(
+                    callId = activeCall.callId,
+                    userIds = setOf(pair.userAId, pair.userBId),
+                    policyVersion = consentPolicyVersion,
+                )
+            ) {
+                return@execute false
+            }
+            val connectedAt = checkNotNull(activeCall.connectedAtEpochMillis)
             recordingCommandStore.enqueueStart(
                 callId = activeCall.callId,
                 roomName = activeCall.roomName,
                 requestedAtEpochMillis = connectedAt,
                 availableAtEpochMillis = CallDurationPolicy.recordingAvailableAtEpochMillis(connectedAt),
             )
+            true
         }
+        if (!recordingScheduled) return
 
         // The durable path intentionally performs no provider I/O in the
         // webhook transaction. A wake-up only asks the dispatcher to process
@@ -195,10 +197,7 @@ class CallRoomLifecycleService(
             // shutdown and delete the room. Read the current persisted status
             // after the conditional claim, including concurrent stop claims.
             val ended = checkNotNull(callSessionStore.find(callId))
-            if (ended.recordingStatus !in setOf(
-                    RecordingStatus.STARTING, RecordingStatus.RECORDING, RecordingStatus.STOPPING,
-                )
-            ) {
+            if (!ended.recordingStatus.isInFlight) {
                 recordingCommandStore.enqueueRoomDelete(
                     callId = callId,
                     roomName = ended.roomName,
@@ -222,10 +221,10 @@ class CallRoomLifecycleService(
         runCatching { recordingCommandProcessor?.processPending() }
     }
 
-    private companion object {
-        const val MIN_PARTICIPANTS_TO_START = 2
-    }
 }
+
+/** Both pair members must be connected before a call becomes ACTIVE. */
+internal const val MIN_PARTICIPANTS_TO_START_CALL = 2
 
 private object ImmediateCallRoomTransaction : ApplicationTransaction {
     override fun <T> execute(block: () -> T): T = block()
