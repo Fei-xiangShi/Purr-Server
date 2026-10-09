@@ -32,6 +32,7 @@ import life.fxs.purr.server.model.RecordingResponseDto
 import life.fxs.purr.server.model.SelfProfile
 import life.fxs.purr.server.model.SessionResponseDto
 import life.fxs.purr.server.application.model.ScreenShareMediaEndpointResult
+import life.fxs.purr.server.application.model.ScreenSharePublishingResult
 import life.fxs.purr.server.application.model.ScreenShareResult
 import life.fxs.purr.server.model.ScreenShareDto
 import life.fxs.purr.server.model.ScreenShareMediaEndpointDto
@@ -178,15 +179,15 @@ internal fun ScreenShareResult.toDto() = ScreenShareDto(
     expiresAtEpochMillis = expiresAtEpochMillis,
     liveAtEpochMillis = liveAtEpochMillis,
     stoppedAtEpochMillis = stoppedAtEpochMillis,
-    publishing = publishing?.let { publishing ->
-        ScreenSharePublishingDto(
-            whip = publishing.whip.toDto(),
-            srt = publishing.srt?.let { ScreenShareSrtDto(it.url, it.streamId, it.passphrase) },
-        )
-    },
+    publishing = publishing?.toDto(),
     playback = playback?.toDto(),
     errorMessage = errorMessage,
     watchUrl = watchUrl,
+)
+
+internal fun ScreenSharePublishingResult.toDto() = ScreenSharePublishingDto(
+    whip = whip.toDto(),
+    srt = srt?.let { ScreenShareSrtDto(it.url, it.streamId, it.passphrase) },
 )
 
 internal fun ScreenShareMediaEndpointResult.toDto() = ScreenShareMediaEndpointDto(

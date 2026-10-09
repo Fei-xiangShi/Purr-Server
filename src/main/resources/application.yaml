@@ -130,6 +130,7 @@ purr:
     shareTtlSeconds: 43200
     reconciliationIntervalMillis: 1000
     reconciliationBatchSize: 100
+    publisherReconnectGraceMillis: 45000
     requestTimeoutMillis: 3000
     srtPublicHost: localhost
     srtPublicPort: 8890

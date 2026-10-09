@@ -12,8 +12,10 @@ class ScreenShareReconciliationService(
     private val provider: ScreenShareProvider,
     private val lifecycleService: ScreenShareLifecycleService,
     private val batchSize: Int,
+    private val publisherReconnectGraceMillis: Long = DEFAULT_PUBLISHER_RECONNECT_GRACE_MILLIS,
 ) {
     private val inboundByteObservations = ConcurrentHashMap<String, Long>()
+    private val unhealthySince = ConcurrentHashMap<String, Long>()
 
     fun reconcileOnce(nowEpochMillis: Long) {
         val initialCandidates = store.findReconciliationCandidates(nowEpochMillis, batchSize)
@@ -50,6 +52,7 @@ class ScreenShareReconciliationService(
                 }
                 ScreenShareStatus.LIVE -> {
                     if (providerPath != null && providerPath.hasInboundProgress(current.shareId)) {
+                        unhealthySince.remove(current.shareId)
                         store.observePresent(
                             shareId = current.shareId,
                             providerSourceType = providerPath.sourceType,
@@ -58,12 +61,10 @@ class ScreenShareReconciliationService(
                         )
                     } else {
                         val missing = store.observeMissing(current.shareId, nowEpochMillis)
-                        val requiredSnapshots = if (providerPath == null) {
-                            REQUIRED_MISSING_SNAPSHOTS
-                        } else {
-                            REQUIRED_STALLED_SNAPSHOTS
-                        }
-                        if (missing != null && missing.missingSnapshotCount >= requiredSnapshots) {
+                        // The owner may be reconnecting; only stop once the
+                        // publisher has been absent or stalled for the grace period.
+                        val since = unhealthySince.putIfAbsent(current.shareId, nowEpochMillis) ?: nowEpochMillis
+                        if (missing != null && nowEpochMillis - since >= publisherReconnectGraceMillis) {
                             val stopped = lifecycleService.stopped(
                                 shareId = current.shareId,
                                 stoppedAtEpochMillis = nowEpochMillis,
@@ -88,6 +89,7 @@ class ScreenShareReconciliationService(
 
     private fun cleanup(record: ScreenShareRecord, nowEpochMillis: Long) {
         inboundByteObservations.remove(record.shareId)
+        unhealthySince.remove(record.shareId)
         try {
             provider.cleanup(record)
             val terminal = if (record.status == ScreenShareStatus.STOPPING) {
@@ -111,8 +113,7 @@ class ScreenShareReconciliationService(
     }
 
     private companion object {
-        const val REQUIRED_MISSING_SNAPSHOTS = 2
-        const val REQUIRED_STALLED_SNAPSHOTS = 5
+        const val DEFAULT_PUBLISHER_RECONNECT_GRACE_MILLIS = 45_000L
         const val MAX_ERROR_LENGTH = 2_048
         val activeStatuses = setOf(ScreenShareStatus.AUTHORIZED, ScreenShareStatus.LIVE)
     }

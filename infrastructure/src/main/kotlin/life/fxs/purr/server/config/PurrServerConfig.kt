@@ -176,6 +176,7 @@ data class MediaMtxConfig(
     val shareTtlSeconds: Long = 43_200,
     val reconciliationIntervalMillis: Long = 1_000,
     val reconciliationBatchSize: Int = 100,
+    val publisherReconnectGraceMillis: Long = 45_000,
     val requestTimeoutMillis: Long = 3_000,
     val srtPublicHost: String = "localhost",
     val srtPublicPort: Int = 8_890,

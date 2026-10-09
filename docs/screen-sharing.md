@@ -17,6 +17,7 @@ Create DNS for PURR_STREAM_DOMAIN and point it at the server. Expose:
 |---|---|---|
 | 443 | TCP | Caddy TLS termination for WHIP/WHEP signaling |
 | 8189 | UDP | Direct MediaMTX WebRTC ICE candidate |
+| 8189 | TCP | MediaMTX ICE-TCP fallback when UDP is blocked |
 | 8890 | UDP | Encrypted OBS SRT fallback |
 
 Do not expose MediaMTX ports 8889, 9997 or 9998. They are private Compose
@@ -37,7 +38,7 @@ signaling and cannot simply be copied into MediaMTX.
 
 For a coturn-compatible TURN REST shared secret:
 
-    MEDIAMTX_TURN_URL=turns:turn.example.com:5349?transport=tcp
+    MEDIAMTX_TURN_URL=turns:turn.example.com:443?transport=tcp
     MEDIAMTX_TURN_USERNAME=AUTH_SECRET
     MEDIAMTX_TURN_PASSWORD=<turn-rest-shared-secret>
 
@@ -87,6 +88,11 @@ Never place media tokens, SDP, TURN passwords or SRT passphrases in logs.
 - A call has at most one authorized/live share.
 - Publish credentials belong only to the owner who created the share.
 - Each viewer receives a fresh WHEP read token.
+- The owner can re-issue publish credentials for an active share with
+  `POST /calls/{callId}/screen-share/{shareId}/publishing` (owner only; 409 once
+  the share is no longer AUTHORIZED/LIVE or has expired). A LIVE share survives a
+  missing or stalled publisher for `PURR_SCREEN_SHARE_PUBLISHER_GRACE_MILLIS`
+  (default 45000) so a mobile publisher can reconnect.
 - Stopping the share, ending the call or reaching the share TTL immediately
   makes HTTP authentication reject both publisher and viewer tokens.
 - Provider cleanup is retried until WebRTC/SRT sessions and the dynamic path

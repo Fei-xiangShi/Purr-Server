@@ -349,6 +349,11 @@ object PurrConfigLoader {
                     "purr.mediaMtx.reconciliationBatchSize",
                     "PURR_MEDIAMTX_RECONCILIATION_BATCH_SIZE",
                 ),
+                publisherReconnectGraceMillis = long(
+                    config,
+                    "purr.mediaMtx.publisherReconnectGraceMillis",
+                    "PURR_SCREEN_SHARE_PUBLISHER_GRACE_MILLIS",
+                ),
                 requestTimeoutMillis = long(
                     config,
                     "purr.mediaMtx.requestTimeoutMillis",
@@ -642,6 +647,9 @@ object PurrConfigLoader {
         }
         require(config.mediaMtx.reconciliationBatchSize in 1..1_000) {
             "MediaMTX reconciliation batch size must be between 1 and 1000"
+        }
+        require(config.mediaMtx.publisherReconnectGraceMillis in 1_000..300_000) {
+            "Screen share publisher reconnect grace must be between 1000 and 300000 milliseconds"
         }
         require(config.mediaMtx.requestTimeoutMillis in 500..30_000) {
             "MediaMTX request timeout must be between 500 and 30000 milliseconds"

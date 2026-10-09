@@ -94,6 +94,32 @@ class ScreenShareService(
         return store.findCurrentByCallId(callId)?.toResult(userId, includePublishing = false)
     }
 
+    /**
+     * Re-issues owner publishing credentials for an existing share so a
+     * reconnecting publisher does not depend on its original (short-lived) token.
+     */
+    fun refreshPublishing(userId: String, callId: String, shareId: String): ScreenSharePublishingResult {
+        requireEnabled()
+        callAccessPolicy.requireAccessibleCall(userId, callId)
+        val record = store.findByShareId(shareId)?.takeIf { it.callId == callId }
+            ?: throw ApplicationException(ApplicationError.NOT_FOUND, "Screen share not found")
+        if (record.ownerUserId != userId) {
+            throw ApplicationException(ApplicationError.FORBIDDEN, "Only the screen share owner can refresh publishing")
+        }
+        val now = nowProvider().toEpochMilli()
+        if (record.status !in setOf(ScreenShareStatus.AUTHORIZED, ScreenShareStatus.LIVE) ||
+            record.expiresAtEpochMillis / MILLIS_PER_SECOND <= now / MILLIS_PER_SECOND
+        ) {
+            throw ApplicationException(ApplicationError.CONFLICT, "Screen share is no longer active")
+        }
+        val passphrase = if (record.source == ScreenShareSource.OBS) {
+            fixedSrtPassphrase ?: srtPassphraseIssuer.issue(record.shareId)
+        } else {
+            null
+        }
+        return checkNotNull(record.toResult(userId, includePublishing = true, srtPassphrase = passphrase).publishing)
+    }
+
     /** Possession of the per-share URL grants read access for the lifetime of that share. */
     fun getBrowserPlayback(shareId: String): ScreenShareMediaEndpointResult {
         requireEnabled()

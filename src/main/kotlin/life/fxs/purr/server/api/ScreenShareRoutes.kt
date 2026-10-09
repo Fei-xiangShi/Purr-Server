@@ -60,6 +60,17 @@ fun Route.registerScreenShareRoutes(dependencies: ServerDependencies) {
             call.respond(HttpStatusCode.OK, ScreenShareEnvelopeDto(result?.toDto()))
         }
 
+        post("/calls/{callId}/screen-share/{shareId}/publishing") {
+            val callId = call.requireCallId()
+            val shareId = call.parameters["shareId"] ?: throw ApiException(HttpStatusCode.BadRequest, "Missing shareId")
+            val user = call.requireAuthenticatedUser()
+            call.response.headers.append(HttpHeaders.CacheControl, "no-store")
+            val result = onBlockingIo {
+                dependencies.screenShareService.refreshPublishing(user.userId, callId, shareId)
+            }
+            call.respond(HttpStatusCode.OK, result.toDto())
+        }
+
         delete("/calls/{callId}/screen-share") {
             val callId = call.requireCallId()
             val user = call.requireAuthenticatedUser()

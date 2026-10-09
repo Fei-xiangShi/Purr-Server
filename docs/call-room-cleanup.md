@@ -29,7 +29,8 @@ Docker publishing a LiveKit port only makes it reachable on the host. The cloud
 security group must independently allow the media paths advertised to clients:
 
 - TCP `7881` for WebRTC TCP fallback.
-- TCP `5349` for TURN over TLS.
+- TCP `443` for HTTPS and TURN over TLS: Caddy routes the `PURR_TURN_DOMAIN` SNI to LiveKit `livekit:5349`; clients use `turns:<turn domain>:443?transport=tcp`. `5349` need not be open.
+- TCP `8189` for MediaMTX ICE-TCP (screen sharing).
 - UDP `3478` for TURN over UDP.
 - UDP `50000-50200` for LiveKit RTC and TURN relay traffic.
 

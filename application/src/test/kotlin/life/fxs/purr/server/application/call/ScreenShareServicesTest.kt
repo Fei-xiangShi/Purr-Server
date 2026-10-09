@@ -8,6 +8,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertFailsWith
+import life.fxs.purr.server.application.ApplicationError
 import life.fxs.purr.server.application.ApplicationException
 import life.fxs.purr.server.application.account.PairService
 import life.fxs.purr.server.application.model.CallHistoryCursor
@@ -168,7 +169,7 @@ class ScreenShareServicesTest {
     }
 
     @Test
-    fun `two complete missing snapshots stop a live share but provider errors do not`() {
+    fun `missing publisher keeps a live share during the reconnect grace and stops after it`() {
         val fixture = Fixture()
         val live = fixture.record(status = ScreenShareStatus.LIVE)
         fixture.store.createIfAbsent(live)
@@ -179,6 +180,7 @@ class ScreenShareServicesTest {
             provider = fixture.provider,
             lifecycleService = fixture.lifecycle,
             batchSize = 10,
+            publisherReconnectGraceMillis = 5_000,
         )
 
         runCatching { reconciliation.reconcileOnce(NOW) }
@@ -188,16 +190,48 @@ class ScreenShareServicesTest {
         fixture.provider.snapshotFailure = null
         fixture.provider.paths = emptyMap()
         reconciliation.reconcileOnce(NOW + 1)
-        assertEquals(1, fixture.store.findByShareId(live.shareId)?.missingSnapshotCount)
-        assertEquals(ScreenShareStatus.LIVE, fixture.store.findByShareId(live.shareId)?.status)
-
         reconciliation.reconcileOnce(NOW + 2)
+        reconciliation.reconcileOnce(NOW + 4_000)
+        assertEquals(ScreenShareStatus.LIVE, fixture.store.findByShareId(live.shareId)?.status)
+        assertTrue(fixture.provider.cleaned.isEmpty())
+
+        reconciliation.reconcileOnce(NOW + 5_001)
         assertEquals(ScreenShareStatus.STOPPED, fixture.store.findByShareId(live.shareId)?.status)
+        assertEquals("Publisher disconnected", fixture.store.findByShareId(live.shareId)?.lastError)
         assertEquals(listOf(live.mediaPath), fixture.provider.cleaned.map { it.mediaPath })
     }
 
     @Test
-    fun `online path with stalled ingress is stopped within the reconciliation window`() {
+    fun `publisher returning within the grace resets the missing window`() {
+        val fixture = Fixture()
+        val live = fixture.record(status = ScreenShareStatus.LIVE)
+        fixture.store.createIfAbsent(live)
+        val reconciliation = ScreenShareReconciliationService(
+            store = fixture.store,
+            provider = fixture.provider,
+            lifecycleService = fixture.lifecycle,
+            batchSize = 10,
+            publisherReconnectGraceMillis = 5_000,
+        )
+        val present = mapOf(
+            live.mediaPath to ScreenShareProviderPath(live.mediaPath, true, "webrtcSession", "publisher-2", null),
+        )
+
+        fixture.provider.paths = emptyMap()
+        reconciliation.reconcileOnce(NOW)
+        reconciliation.reconcileOnce(NOW + 4_000)
+        fixture.provider.paths = present
+        reconciliation.reconcileOnce(NOW + 4_500)
+        fixture.provider.paths = emptyMap()
+        reconciliation.reconcileOnce(NOW + 6_000)
+        reconciliation.reconcileOnce(NOW + 10_000)
+        assertEquals(ScreenShareStatus.LIVE, fixture.store.findByShareId(live.shareId)?.status)
+        reconciliation.reconcileOnce(NOW + 11_001)
+        assertEquals(ScreenShareStatus.STOPPED, fixture.store.findByShareId(live.shareId)?.status)
+    }
+
+    @Test
+    fun `online path with stalled ingress is stopped only after the grace period`() {
         val fixture = Fixture()
         val live = fixture.record(status = ScreenShareStatus.LIVE)
         fixture.store.createIfAbsent(live)
@@ -215,16 +249,57 @@ class ScreenShareServicesTest {
             provider = fixture.provider,
             lifecycleService = fixture.lifecycle,
             batchSize = 10,
+            publisherReconnectGraceMillis = 5_000,
         )
 
         reconciliation.reconcileOnce(NOW)
-        repeat(4) { index -> reconciliation.reconcileOnce(NOW + index + 1L) }
+        reconciliation.reconcileOnce(NOW + 1_000)
+        reconciliation.reconcileOnce(NOW + 5_000)
         assertEquals(ScreenShareStatus.LIVE, fixture.store.findByShareId(live.shareId)?.status)
 
-        reconciliation.reconcileOnce(NOW + 5)
+        reconciliation.reconcileOnce(NOW + 6_001)
         assertEquals(ScreenShareStatus.STOPPED, fixture.store.findByShareId(live.shareId)?.status)
         assertEquals("Publisher stopped sending media", fixture.store.findByShareId(live.shareId)?.lastError)
         assertEquals(listOf(live.mediaPath), fixture.provider.cleaned.map { it.mediaPath })
+    }
+
+    @Test
+    fun `refreshPublishing is owner only and limited to active unexpired shares`() {
+        val fixture = Fixture()
+        fixture.service.create(USER_A, CALL_ID, CreateScreenShareCommand(ScreenShareSource.MOBILE))
+
+        val authorized = fixture.service.refreshPublishing(USER_A, CALL_ID, SHARE_ID)
+        assertEquals("https://stream.example/screen-$SHARE_ID/whip", authorized.whip.url)
+        assertEquals("publish-$USER_A", authorized.whip.bearerToken)
+        assertNull(authorized.srt)
+
+        val forbidden = assertFailsWith<ApplicationException> {
+            fixture.service.refreshPublishing(USER_B, CALL_ID, SHARE_ID)
+        }
+        assertEquals(ApplicationError.FORBIDDEN, forbidden.error)
+        val missing = assertFailsWith<ApplicationException> {
+            fixture.service.refreshPublishing(USER_A, CALL_ID, "other")
+        }
+        assertEquals(ApplicationError.NOT_FOUND, missing.error)
+
+        fixture.store.markLive(SHARE_ID, "webrtcSession", "p", NOW)
+        fixture.service.refreshPublishing(USER_A, CALL_ID, SHARE_ID)
+
+        fixture.now += 600_000
+        assertEquals(
+            ApplicationError.CONFLICT,
+            assertFailsWith<ApplicationException> {
+                fixture.service.refreshPublishing(USER_A, CALL_ID, SHARE_ID)
+            }.error,
+        )
+        fixture.now = NOW
+        fixture.service.stop(USER_A, CALL_ID)
+        assertEquals(
+            ApplicationError.CONFLICT,
+            assertFailsWith<ApplicationException> {
+                fixture.service.refreshPublishing(USER_A, CALL_ID, SHARE_ID)
+            }.error,
+        )
     }
 
     private fun request(token: String, action: String, protocol: String, path: String) =

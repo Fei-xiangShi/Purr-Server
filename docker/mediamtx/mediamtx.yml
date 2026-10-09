@@ -35,7 +35,7 @@ webrtcAddress: :8889
 webrtcEncryption: false
 webrtcAllowOrigins: ["*"]
 webrtcLocalUDPAddress: :8189
-webrtcLocalTCPAddress: ""
+webrtcLocalTCPAddress: :8189
 webrtcIPsFromInterfaces: false
 webrtcAdditionalHosts: []
 webrtcICEServers2: []
@@ -49,7 +49,9 @@ srtAddress: :8890
 
 pathDefaults:
   source: publisher
-  overridePublisher: false
+  # A reconnecting owner may publish before the old session times out; the
+  # publish token still has to authorize the new session.
+  overridePublisher: true
   maxReaders: 8
   record: false
 

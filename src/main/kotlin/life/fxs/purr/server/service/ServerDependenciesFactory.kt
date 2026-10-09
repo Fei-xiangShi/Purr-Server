@@ -456,6 +456,7 @@ object ServerDependenciesFactory {
                     provider = screenShareProvider,
                     lifecycleService = screenShareLifecycleService,
                     batchSize = config.mediaMtx.reconciliationBatchSize,
+                    publisherReconnectGraceMillis = config.mediaMtx.publisherReconnectGraceMillis,
                 ),
             ).also { it.start() }
             screenShareReconciliationWorker = mediaReconciliationWorker

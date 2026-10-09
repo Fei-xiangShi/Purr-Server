@@ -1,7 +1,25 @@
 {
 	admin off
 	email {$ACME_EMAIL}
-	servers {
+	servers :443 {
+		listener_wrappers {
+			layer4 {
+				@turn tls sni {$PURR_TURN_DOMAIN}
+				route @turn {
+					proxy livekit:5349
+				}
+			}
+			tls
+		}
+		timeouts {
+			read_body 30s
+			read_header 10s
+			write 30s
+			idle 2m
+		}
+		max_header_size 32KB
+	}
+	servers :80 {
 		timeouts {
 			read_body 30s
 			read_header 10s

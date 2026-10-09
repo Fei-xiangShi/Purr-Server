@@ -2,7 +2,9 @@ services:
   caddy:
     profiles: ["bundled-proxy"]
     restart: unless-stopped
-    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    build:
+      context: ./docker/caddy
+    image: purr-caddy-l4:2.10.2
     read_only: true
     tmpfs:
       - /tmp:size=32m,mode=1777
@@ -23,6 +25,7 @@ services:
       PURR_LIVEKIT_DOMAIN: ${PURR_LIVEKIT_DOMAIN:?PURR_LIVEKIT_DOMAIN is required}
       PURR_STORAGE_DOMAIN: ${PURR_STORAGE_DOMAIN:?PURR_STORAGE_DOMAIN is required}
       PURR_STREAM_DOMAIN: ${PURR_STREAM_DOMAIN:?PURR_STREAM_DOMAIN is required}
+      PURR_TURN_DOMAIN: ${PURR_TURN_DOMAIN:?PURR_TURN_DOMAIN is required}
     ports:
       - "80:80"
       - "443:443"
@@ -147,11 +150,13 @@ services:
           # discovery request is filtered or times out.
           use_external_ip: false
         # Embedded TURN keeps calls working when a mobile network blocks
-        # direct peer candidates or UDP ICE checks. The host certificate
-        # covers livekit.purr.fxs.life and is mounted read-only below.
+        # direct peer candidates or UDP ICE checks. LiveKit advertises
+        # turns:<turn.domain>:443; Caddy (caddy-l4) routes that SNI to tls_port.
+        # The host certificate must cover PURR_TURN_DOMAIN (SAN/wildcard) and
+        # is mounted read-only below.
         turn:
           enabled: true
-          domain: livekit.purr.fxs.life
+          domain: ${PURR_TURN_DOMAIN:?PURR_TURN_DOMAIN is required}
           udp_port: 3478
           tls_port: 5349
           relay_range_start: 50101
@@ -206,6 +211,7 @@ services:
       MTX_WEBRTCICESERVERS2_0_CLIENTONLY: "true"
     ports:
       - "8189:8189/udp"
+      - "8189:8189/tcp"
       - "8890:8890/udp"
     expose:
       - "8889"
@@ -395,6 +401,7 @@ services:
       PURR_MEDIAMTX_SHARE_TTL_SECONDS: ${PURR_MEDIAMTX_SHARE_TTL_SECONDS:-43200}
       PURR_MEDIAMTX_RECONCILIATION_INTERVAL_MILLIS: ${PURR_MEDIAMTX_RECONCILIATION_INTERVAL_MILLIS:-1000}
       PURR_MEDIAMTX_RECONCILIATION_BATCH_SIZE: ${PURR_MEDIAMTX_RECONCILIATION_BATCH_SIZE:-100}
+      PURR_SCREEN_SHARE_PUBLISHER_GRACE_MILLIS: ${PURR_SCREEN_SHARE_PUBLISHER_GRACE_MILLIS:-45000}
       PURR_MEDIAMTX_REQUEST_TIMEOUT_MILLIS: ${PURR_MEDIAMTX_REQUEST_TIMEOUT_MILLIS:-3000}
       PURR_MEDIAMTX_SRT_PUBLIC_HOST: ${PURR_STREAM_DOMAIN:?PURR_STREAM_DOMAIN is required}
       PURR_MEDIAMTX_SRT_PUBLIC_PORT: 8890
