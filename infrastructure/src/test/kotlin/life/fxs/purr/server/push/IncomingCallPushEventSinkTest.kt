@@ -71,6 +71,43 @@ class IncomingCallPushEventSinkTest {
     }
 
     @Test
+    fun `call that is no longer ringing is not pushed on a late retry`() = runBlocking {
+        val store = FakeStore(mutableListOf(device("token-a")))
+        val asked = mutableListOf<String>()
+        val sink = IncomingCallPushEventSink(
+            deviceStore = store,
+            sender = PushNotificationSender { _, _ -> error("must not send") },
+            enabled = true,
+            isCallRinging = { callId -> asked += callId; false },
+        )
+
+        sink.publishToUser("user-b", callStarted())
+
+        assertEquals(listOf("call-1"), asked)
+        assertTrue(store.queries == 0)
+    }
+
+    @Test
+    fun `permanently rejected device does not fail the event or disable the device`() = runBlocking {
+        val store = FakeStore(mutableListOf(device("token-a"), device("token-b")))
+        val attempted = mutableListOf<String>()
+        val sink = IncomingCallPushEventSink(
+            deviceStore = store,
+            sender = PushNotificationSender { device, _ ->
+                attempted += device.token
+                if (device.token == "token-a") PushDeliveryResult.Rejected("HTTP 400 INVALID_ARGUMENT")
+                else PushDeliveryResult.Delivered
+            },
+            enabled = true,
+        )
+
+        sink.publishToUser("user-b", callStarted())
+
+        assertEquals(listOf("token-a", "token-b"), attempted)
+        assertTrue(store.disabled.isEmpty())
+    }
+
+    @Test
     fun `non call event does not query device storage`() = runBlocking {
         val store = FakeStore(mutableListOf(device("token-a")))
         val sink = IncomingCallPushEventSink(

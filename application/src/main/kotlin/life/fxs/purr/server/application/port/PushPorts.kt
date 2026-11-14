@@ -34,6 +34,9 @@ sealed interface PushDeliveryResult {
     data object Delivered : PushDeliveryResult
 
     data object DeviceUnregistered : PushDeliveryResult
+
+    /** The provider refused this request permanently; retrying the same message cannot succeed. */
+    data class Rejected(val reason: String) : PushDeliveryResult
 }
 
 fun interface PushNotificationSender {

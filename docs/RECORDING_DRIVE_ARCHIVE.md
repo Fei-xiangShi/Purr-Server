@@ -42,10 +42,17 @@ To recover from a revoked or expired grant, rerun `:infrastructure:authorizeGoog
 
 ## Retention
 
-The retention worker runs daily at 17:00 in `Asia/Shanghai` by default. It deletes only local objects that:
+The retention worker catches up immediately on startup, then runs daily at
+17:00 in `Asia/Shanghai` by default. Failed passes or object deletions retry
+after `PURR_RECORDING_CLEANUP_INTERVAL_SECONDS` (default one hour), or at the
+next daily run if sooner. Each pass logs its candidate, deletion and failure
+counts. It deletes only local objects that:
 
-- completed more than seven days ago;
+- completed at least seven days ago;
 - have a confirmed Google Drive file ID and upload timestamp; and
 - have not already been deleted locally.
+
+Objects with an active restore lease are excluded. Late provider callbacks
+cannot reintroduce the local object reference after successful deletion.
 
 The database row and Drive identity remain after local deletion. Upload or deletion failures preserve the local object and are retried. Disable `PURR_GOOGLE_DRIVE_ENABLED` to stop uploads or `PURR_RECORDING_CLEANUP_ENABLED` to stop local deletion during an incident.

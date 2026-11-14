@@ -229,7 +229,7 @@ class PurrRoutesTest {
     }
 
     @Test
-    fun `push registration is validated and removed when its auth session rotates`() = isolatedTestApplication {
+    fun `push registration is validated, survives token rotation and is removed on logout`() = isolatedTestApplication {
         val tokens = client.loginWithRefreshToken("user-a", "pass-a")
         val installationId = "550e8400-e29b-41d4-a716-446655440000"
         val token = "fcm-token-abcdefghijklmnopqrstuvwxyz-0123456789"
@@ -268,6 +268,14 @@ class PurrRoutesTest {
             setBody("""{"refreshToken":"${tokens.refreshToken}"}""")
         }
         assertEquals(HttpStatusCode.OK, refreshed.status)
+        // Rotation is the same login continuing: the phone must stay reachable
+        // even if it cannot re-register right after the refresh.
+        assertEquals(1, countPushDevices(installationId))
+
+        val logout = client.post("/auth/logout") {
+            header(HttpHeaders.Authorization, "Bearer ${refreshed.bodyAsText().requireJsonString("accessToken")}")
+        }
+        assertEquals(HttpStatusCode.OK, logout.status)
         assertEquals(0, countPushDevices(installationId))
     }
 

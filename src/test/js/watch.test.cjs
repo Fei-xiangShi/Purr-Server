@@ -8,7 +8,7 @@ const script = fs.readFileSync(path.join(__dirname, '../../main/resources/web/wa
 function harness({ expired = false, hevc = true, share = false, resource = share ? '/screen-share-test/whep/session' : '/screen-test/whep/session', fetchOverride } = {}) {
   const nodes = new Map();
   const node = id => {
-    if (!nodes.has(id)) nodes.set(id, { textContent: '', disabled: false, srcObject: null, play: async () => {} });
+    if (!nodes.has(id)) nodes.set(id, { textContent: '', disabled: false, hidden: false, srcObject: null, dataset: {}, style: { setProperty() {} }, addEventListener() {}, play: async () => {} });
     return nodes.get(id);
   };
   const calls = [], peers = [], timers = new Map();
@@ -43,7 +43,7 @@ function harness({ expired = false, hevc = true, share = false, resource = share
     clearTimeout: id => timers.delete(id), setInterval: fn => { timers.set(++timerId, fn); return timerId; },
     clearInterval: id => timers.delete(id),
   });
-  return { node, calls, peers, location };
+  return { node, calls, peers, location, timers };
 }
 
 const settled = () => new Promise(resolve => setImmediate(resolve));
@@ -133,4 +133,45 @@ test('stop during discovery prevents late network response from reopening playba
 test('expired authorization is distinguished from server failure', async () => {
   const h = harness({ fetchOverride: (_, __, response) => response(401) }); await h.node('play').onclick();
   assert.match(h.node('status').textContent, /重新复制/); assert.equal(h.peers.length, 0);
+});
+
+test('share playback retries automatically while the publisher is absent and stops when the share ends', async () => {
+  let ended = false;
+  const h = harness({ share: true, fetchOverride: (_, options, response) => {
+    if (options.method === 'GET') return ended ? response(404)
+      : { ...response(200), json: async () => ({ url: 'https://stream.test/screen-share-test/whep', bearerToken: 'fresh' }) };
+    return response(404);
+  } });
+  await settled();
+  assert.equal(h.node('player').dataset.state, 'waiting');
+  assert.match(h.node('status').textContent, /自动重试/);
+  assert.equal(h.node('stop').disabled, false);
+  assert.equal(h.timers.size, 1);
+  ended = true;
+  const [[id, retry]] = [...h.timers.entries()]; h.timers.delete(id); retry(); await settled();
+  assert.equal(h.node('player').dataset.state, 'error');
+  assert.match(h.node('status').textContent, /已停止/);
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.node('play').disabled, false);
+});
+test('stop cancels a pending automatic retry', async () => {
+  const h = harness({ share: true, fetchOverride: async () => { throw new TypeError('offline'); } });
+  await settled();
+  assert.equal(h.timers.size, 1);
+  h.node('stop').onclick();
+  assert.equal(h.timers.size, 0);
+  assert.match(h.node('status').textContent, /已停止观看/);
+  assert.equal(h.node('player').dataset.state, 'idle');
+});
+test('legacy fragment links never retry automatically', async () => {
+  const h = harness({ fetchOverride: (_, __, response) => response(404) }); await h.node('play').onclick();
+  assert.equal(h.timers.size, 0);
+  assert.equal(h.node('player').dataset.state, 'error');
+});
+test('state badge and unmute prompt follow playback state', async () => {
+  const h = harness({ share: true }); await settled();
+  assert.equal(h.node('badge').dataset.state, 'connecting');
+  assert.equal(h.node('unmute').hidden, true);
+  h.node('stop').onclick();
+  assert.equal(h.node('badge').textContent, '未播放');
 });

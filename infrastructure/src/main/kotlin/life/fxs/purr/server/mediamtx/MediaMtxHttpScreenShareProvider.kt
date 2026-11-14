@@ -28,7 +28,11 @@ class MediaMtxHttpScreenShareProvider(
         val body = json.encodeToString(
             PathConfiguration(
                 source = "publisher",
-                overridePublisher = false,
+                // Explicit per-path values replace pathDefaults. A reconnecting
+                // owner (network switch, app restart) must be able to publish
+                // before MediaMTX times out the dead session; the publish token
+                // still restricts the path to the share owner.
+                overridePublisher = true,
                 maxReaders = 8,
                 record = false,
                 srtPublishPassphrase = srtPublishPassphrase,

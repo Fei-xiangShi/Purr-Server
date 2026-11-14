@@ -3,6 +3,8 @@ package life.fxs.purr.server.recording
 import java.time.Instant
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.awaitCancellation
 import kotlin.concurrent.thread
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -24,6 +26,61 @@ import life.fxs.purr.server.repository.PairBondRepository
 import life.fxs.purr.server.repository.UserRepository
 
 class RecordingRetentionServiceTest {
+    @Test
+    fun `worker catches up on startup and retries failures at configured interval`() = withDatabase {
+        val repository = seedExpiredRecording("recording-startup")
+        val now = AtomicReference(NOW)
+        val settled = CountDownLatch(1)
+        val delays = mutableListOf<Long>()
+        var attempts = 0
+        val service = RecordingRetentionService(
+            retentionConfig(), repository,
+            RecordingObjectStore { if (++attempts == 1) error("temporary storage outage") },
+            nowProvider = now::get,
+            delayProvider = { millis ->
+                delays += millis
+                if (delays.size == 1) now.set(now.get().plusMillis(millis)) else {
+                    settled.countDown()
+                    awaitCancellation()
+                }
+            },
+        )
+        try {
+            service.start()
+            assertTrue(settled.await(5, TimeUnit.SECONDS))
+            assertEquals(2, attempts)
+            assertEquals(60_000L, delays.first())
+            assertEquals(service.millisUntilNextRun(now.get()), delays.last())
+            assertEquals(RecordingStatus.DELETED, repository.findByRecordingId("recording-startup")?.status)
+        } finally { service.close() }
+    }
+
+    @Test
+    fun `cleanup does not race an active restore even after candidate was read`() = withDatabase {
+        val repository = seedExpiredRecording("recording-restore")
+        val candidate = repository.findRetentionCandidates(NOW.toEpochMilli(), NOW.toEpochMilli(), 1).single()
+        assertNotNull(repository.claimRestore("recording-restore", "restore-worker",
+            NOW.toEpochMilli(), NOW.plusSeconds(60).toEpochMilli()))
+        assertTrue(repository.findRetentionCandidates(NOW.toEpochMilli(), NOW.toEpochMilli(), 1).isEmpty())
+        assertNull(repository.claimDeletion(candidate, "delete-worker", NOW.toEpochMilli(), NOW.plusSeconds(60).toEpochMilli()))
+    }
+
+    @Test
+    fun `late completion webhook cannot resurrect deleted local recording`() = withDatabase {
+        val repository = seedExpiredRecording("recording-late")
+        RecordingRetentionService(retentionConfig(), repository, RecordingObjectStore { }).use {
+            assertEquals(1, it.cleanupOnce(NOW).deleted)
+        }
+        repository.updateCurrent("call-1", ProviderRecordingResult(
+            RecordingStatus.STOPPED, "recording-late", NOW.plusSeconds(1).toEpochMilli(),
+            objectKey = "recordings/call-1/audio.ogg",
+        ))
+        val recording = assertNotNull(repository.findByRecordingId("recording-late"))
+        assertEquals(RecordingStatus.DELETED, recording.status)
+        assertNull(recording.objectKey)
+        assertNotNull(recording.driveFileId)
+    }
+
     @Test
     fun `expired recording object is deleted while audit metadata is retained`() = withDatabase {
         val repository = seedExpiredRecording("recording-delete")

@@ -84,6 +84,35 @@ class CallRoomReconciliationServiceTest {
         assertEquals(2, events.events.single().reportedParticipantCount)
     }
 
+    @Test
+    fun `provider failure leaves the call untouched and is reported for logging`() {
+        val store = ReconciliationStore(activeCall())
+        val events = RecordingEventHandler()
+        val reported = mutableListOf<Pair<String, String?>>()
+        val service = CallRoomReconciliationService(
+            store = store,
+            participantReader = object : CallRoomParticipantReader {
+                override fun countActiveNonEgressParticipants(roomName: String): Int = error("unused")
+                override fun countPresentNonEgressParticipants(roomName: String): Int =
+                    throw IllegalStateException("LiveKit unavailable")
+            },
+            roomEventHandler = events,
+            waitingCallTerminator = RecordingWaitingTerminator(),
+            waitingTtlMillis = 1_000L,
+            emptyRoomGraceMillis = 100L,
+            batchSize = 10,
+            recordingCommandStore = NoOpRecordingCommandStore,
+            onCallFailure = { callId, error -> reported += callId to error.message },
+        )
+
+        val summary = service.reconcileOnce(86_400_000L)
+
+        assertEquals(1, summary.failed)
+        assertEquals(listOf<Pair<String, String?>>("call-1" to "LiveKit unavailable"), reported)
+        assertEquals(CallState.ACTIVE, store.call.state)
+        assertEquals(emptyList(), events.events)
+    }
+
     private fun service(
         store: ReconciliationStore,
         reader: MutableParticipantReader,

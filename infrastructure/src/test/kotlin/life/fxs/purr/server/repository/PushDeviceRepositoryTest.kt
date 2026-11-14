@@ -30,6 +30,26 @@ class PushDeviceRepositoryTest {
     }
 
     @Test
+    fun `refresh token rotation keeps the push registration on the replacement session`() = withDatabase {
+        val users = UserRepository()
+        users.insertIfAbsent("user-a", "user-a", "password", "User A", null)
+        val sessions = AuthSessionRepository()
+        val session = sessions.create("user-a", "refresh-token", 1L, 10_000L)
+        val repository = PushDeviceRepository()
+        repository.upsert(device(session.sessionId, token = TOKEN_A, updatedAt = 2L))
+
+        val rotated = checkNotNull(sessions.rotate("refresh-token", "next-refresh-token", 5L, 20_000L))
+
+        val registered = repository.findActiveByUserId("user-a").single()
+        assertEquals(TOKEN_A, registered.token)
+        assertEquals(rotated.sessionId, registered.sessionId)
+        assertTrue(!sessions.isActive(session.sessionId, "user-a", 6L))
+
+        sessions.deleteBySessionId(rotated.sessionId)
+        assertTrue(repository.findActiveByUserId("user-a").isEmpty())
+    }
+
+    @Test
     fun `unregistered token is disabled without deleting installation history`() = withDatabase {
         val users = UserRepository()
         users.insertIfAbsent("user-a", "user-a", "password", "User A", null)

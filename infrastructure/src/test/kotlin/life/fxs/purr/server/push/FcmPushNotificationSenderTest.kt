@@ -51,4 +51,23 @@ class FcmPushNotificationSenderTest {
         assertNull(classifier.classify(404, "{\"error\":{\"status\":\"NOT_FOUND\"}}"))
         assertNull(classifier.classify(503, "UNREGISTERED"))
     }
+
+    @Test
+    fun `permanent request errors are rejected instead of retried`() {
+        val classifier = FcmResponseClassifier(json)
+        val invalidArgument =
+            """{"error":{"code":400,"status":"INVALID_ARGUMENT","details":[{"errorCode":"INVALID_ARGUMENT"}]}}"""
+
+        assertEquals(
+            PushDeliveryResult.Rejected("HTTP 400 INVALID_ARGUMENT"),
+            classifier.classify(400, invalidArgument),
+        )
+        assertEquals(
+            PushDeliveryResult.Rejected("HTTP 403 SENDER_ID_MISMATCH"),
+            classifier.classify(403, """{"error":{"details":[{"errorCode":"SENDER_ID_MISMATCH"}]}}"""),
+        )
+        assertNull(classifier.classify(401, "{}"))
+        assertNull(classifier.classify(429, """{"error":{"details":[{"errorCode":"QUOTA_EXCEEDED"}]}}"""))
+        assertNull(classifier.classify(500, "{}"))
+    }
 }

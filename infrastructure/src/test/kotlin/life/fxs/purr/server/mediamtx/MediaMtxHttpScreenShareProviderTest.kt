@@ -37,6 +37,7 @@ class MediaMtxHttpScreenShareProviderTest {
             assertEquals("POST", add.method)
             assertTrue(add.body.contains("\"srtPublishPassphrase\":\"0123456789-passphrase\""))
             assertTrue(add.body.contains("\"maxReaders\":8"))
+            assertTrue(add.body.contains("\"overridePublisher\":true"))
             assertTrue(stub.requests.any { it.path == "/v3/webrtc/sessions/kick/webrtc-1" })
             assertTrue(stub.requests.none { it.path == "/v3/webrtc/sessions/kick/webrtc-other" })
             assertTrue(stub.requests.any { it.path == "/v3/srt/conns/kick/srt-1" })

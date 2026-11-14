@@ -31,13 +31,32 @@ class ScreenShareReconciliationWorker(
     fun start() {
         if (!config.enabled || closed.get() || !started.compareAndSet(false, true)) return
         job = scope.launch {
+            // Passes run about once a second; an unreachable MediaMTX must not
+            // write a stack trace per second for the whole outage.
+            var consecutiveFailures = 0
             while (isActive && !closed.get()) {
                 try {
                     service.reconcileOnce(nowProvider().toEpochMilli())
+                    if (consecutiveFailures > 0) {
+                        logger.info(
+                            "MediaMTX screen-share reconciliation recovered after {} failed passes",
+                            consecutiveFailures,
+                        )
+                        consecutiveFailures = 0
+                    }
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Throwable) {
-                    logger.warn("MediaMTX screen-share reconciliation pass failed", error)
+                    consecutiveFailures++
+                    if (consecutiveFailures == 1) {
+                        logger.warn("MediaMTX screen-share reconciliation pass failed", error)
+                    } else if (consecutiveFailures % REPEATED_FAILURE_LOG_INTERVAL == 0) {
+                        logger.warn(
+                            "MediaMTX screen-share reconciliation still failing after {} passes: {}",
+                            consecutiveFailures,
+                            error.toString(),
+                        )
+                    }
                 }
                 delay(config.reconciliationIntervalMillis)
             }
@@ -49,5 +68,9 @@ class ScreenShareReconciliationWorker(
         job?.cancel()
         runBlocking { job?.cancelAndJoin() }
         scope.cancel()
+    }
+
+    private companion object {
+        const val REPEATED_FAILURE_LOG_INTERVAL = 60
     }
 }

@@ -26,11 +26,18 @@ class CallRecordingRepository : CallRecordingStore, RecordingRestoreStore {
     override fun updateCurrent(callId: String, result: ProviderRecordingResult): Boolean = transaction {
         val call = CallSessionsTable.selectAll()
             .where { CallSessionsTable.callId eq callId }
+            .forUpdate()
             .singleOrNull()
             ?: return@transaction false
 
         val currentRecordingId = call[CallSessionsTable.recordingId]
-        val resultIsCurrent = result.recordingId == currentRecordingId || currentRecordingId == null
+        // While a new segment is STARTING its id is null. A late callback for
+        // a known previous segment must not bind that old id to the new one.
+        val knownRecording = result.recordingId?.let { id ->
+            CallRecordingsTable.selectAll().where { CallRecordingsTable.recordingId eq id }.singleOrNull()
+        }
+        val resultIsCurrent = result.recordingId == currentRecordingId ||
+            (currentRecordingId == null && knownRecording == null)
         val currentRecordingClock = call[CallSessionsTable.recordingProviderUpdatedAtEpochMillis]
             ?: Long.MIN_VALUE
         if (resultIsCurrent && result.updatedAtEpochMillis >= currentRecordingClock) {
@@ -168,12 +175,16 @@ class CallRecordingRepository : CallRecordingStore, RecordingRestoreStore {
                     (
                         (
                             CallRecordingsTable.endedAtEpochMillis.isNotNull() and
-                                (CallRecordingsTable.endedAtEpochMillis less endedBeforeEpochMillis)
+                                (CallRecordingsTable.endedAtEpochMillis lessEq endedBeforeEpochMillis)
                             ) or
                             (
                                 CallRecordingsTable.endedAtEpochMillis.isNull() and
-                                    (CallRecordingsTable.updatedAtEpochMillis less endedBeforeEpochMillis)
+                                    (CallRecordingsTable.updatedAtEpochMillis lessEq endedBeforeEpochMillis)
                                 )
+                        ) and
+                    (
+                        CallRecordingsTable.restoreLeaseUntilEpochMillis.isNull() or
+                            (CallRecordingsTable.restoreLeaseUntilEpochMillis less nowEpochMillis)
                         ) and
                     (
                         CallRecordingsTable.deletionLeaseUntilEpochMillis.isNull() or
@@ -204,6 +215,10 @@ class CallRecordingRepository : CallRecordingStore, RecordingRestoreStore {
                         CallRecordingsTable.deletedAtEpochMillis.isNull() and
                         CallRecordingsTable.driveFileId.isNotNull() and
                         CallRecordingsTable.driveUploadedAtEpochMillis.isNotNull() and
+                        (
+                            CallRecordingsTable.restoreLeaseUntilEpochMillis.isNull() or
+                                (CallRecordingsTable.restoreLeaseUntilEpochMillis less attemptedAtEpochMillis)
+                            ) and
                         (
                             CallRecordingsTable.deletionLeaseUntilEpochMillis.isNull() or
                                 (CallRecordingsTable.deletionLeaseUntilEpochMillis less attemptedAtEpochMillis)
@@ -361,6 +376,9 @@ class CallRecordingRepository : CallRecordingStore, RecordingRestoreStore {
         val existing = CallRecordingsTable.selectAll()
             .where { CallRecordingsTable.recordingId eq recordingId }
             .single()
+        // Provider callbacks cannot restore a locally deleted object. Only the
+        // explicit restore workflow can put it back and clear deletedAt.
+        if (existing[CallRecordingsTable.deletedAtEpochMillis] != null) return
         if (result.updatedAtEpochMillis < existing[CallRecordingsTable.updatedAtEpochMillis]) return
 
         val effectiveObjectKey = result.objectKey ?: existing[CallRecordingsTable.objectKey]

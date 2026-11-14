@@ -59,6 +59,47 @@ class CallRecordingRepositoryTest {
         }
     }
 
+    @Test
+    fun `late webhook for previous recording cannot bind to a restart whose id is not known yet`() {
+        val resources = DatabaseFactory(
+            DatabaseConfig(
+                jdbcUrl = "jdbc:h2:mem:recording-restart-${System.nanoTime()};MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+                driverClassName = "org.h2.Driver",
+                username = "sa",
+                password = "",
+                maximumPoolSize = 2,
+            ),
+        ).connect()
+
+        try {
+            seedCall()
+            val callRepository = CallSessionRepository()
+            val recordingRepository = CallRecordingRepository()
+
+            recordingRepository.updateCurrent(CALL_ID, result("egress-a", RecordingStatus.RECORDING, updatedAt = 20L))
+            recordingRepository.updateCurrent(CALL_ID, result("egress-a", RecordingStatus.STOPPED, updatedAt = 30L))
+            assertNotNull(callRepository.claimRecordingStart(CALL_ID, updatedAtEpochMillis = 40L))
+
+            // The restart is STARTING with no provider id yet.
+            recordingRepository.updateCurrent(CALL_ID, result("egress-a", RecordingStatus.FAILED, updatedAt = 60L))
+
+            val starting = assertNotNull(callRepository.find(CALL_ID))
+            assertEquals(null, starting.recordingId)
+            assertEquals(RecordingStatus.STARTING, starting.recordingStatus)
+            assertEquals(
+                RecordingStatus.FAILED,
+                recordingRepository.findByCallId(CALL_ID).single().status,
+            )
+
+            recordingRepository.updateCurrent(CALL_ID, result("egress-b", RecordingStatus.RECORDING, updatedAt = 50L))
+            val restarted = assertNotNull(callRepository.find(CALL_ID))
+            assertEquals("egress-b", restarted.recordingId)
+            assertEquals(RecordingStatus.RECORDING, restarted.recordingStatus)
+        } finally {
+            (resources.dataSource as? AutoCloseable)?.close()
+        }
+    }
+
     private fun seedCall() {
         val users = UserRepository()
         val pairs = PairBondRepository()

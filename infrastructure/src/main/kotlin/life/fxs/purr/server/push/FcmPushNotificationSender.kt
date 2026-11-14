@@ -130,10 +130,15 @@ internal class FcmResponseClassifier(
 ) {
     fun classify(statusCode: Int, responseBody: String): PushDeliveryResult? {
         if (statusCode in 200..299) return PushDeliveryResult.Delivered
-        return if (responseBody.fcmErrorCode() == UNREGISTERED) {
-            PushDeliveryResult.DeviceUnregistered
-        } else {
-            null
+        val errorCode = responseBody.fcmErrorCode()
+        return when {
+            errorCode == UNREGISTERED -> PushDeliveryResult.DeviceUnregistered
+            // INVALID_ARGUMENT (malformed token/message) and SENDER_ID_MISMATCH /
+            // PERMISSION_DENIED never succeed on retry. 401, 404 without a
+            // structured code, 429 and 5xx stay retryable.
+            statusCode == 400 || statusCode == 403 ->
+                PushDeliveryResult.Rejected("HTTP $statusCode ${errorCode ?: "unknown FCM error"}")
+            else -> null
         }
     }
 

@@ -110,6 +110,19 @@ connections, and stopping the share removes the media path and existing readers.
 
 `https://<stream-domain>/watch` serves the player; Caddy routes `/watch` and
 `/watch.js` to purr-server. Media signaling remains on the same MediaMTX origin.
+A deployment that terminates TLS with its own reverse proxy instead of the
+bundled Caddy must add the same rule on the stream domain, ahead of the MediaMTX
+catch-all. Without it MediaMTX receives `/watch/<shareId>` and answers
+`path 'watch/<shareId>' is not configured`. For nginx:
+
+```nginx
+location ~ ^/(watch(/.*)?|watch\.js)$ {
+    proxy_pass http://127.0.0.1:8080;   # same upstream as the API domain
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
 The page receives HEVC video and program audio over WHEP, without joining the
 LiveKit voice room or requesting microphone/camera permissions. It requires a
 browser/device that exposes H.265 in WebRTC capabilities; there is no transcoding

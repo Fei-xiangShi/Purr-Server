@@ -3,6 +3,7 @@ package life.fxs.purr.server.repository
 import java.security.MessageDigest
 import java.util.UUID
 import life.fxs.purr.server.db.table.AuthSessionsTable
+import life.fxs.purr.server.db.table.PushDevicesTable
 import life.fxs.purr.server.application.port.AuthSessionRecord
 import life.fxs.purr.server.application.port.AuthSessionStore
 import org.jetbrains.exposed.sql.ResultRow
@@ -12,6 +13,7 @@ import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.jetbrains.exposed.sql.update
 
 class AuthSessionRepository : AuthSessionStore {
     override fun create(
@@ -78,13 +80,21 @@ class AuthSessionRepository : AuthSessionStore {
             return@transaction null
         }
 
-        AuthSessionsTable.deleteWhere { AuthSessionsTable.sessionId eq current.sessionId }
-        createInCurrentTransaction(
+        val replacement = createInCurrentTransaction(
             userId = current.userId,
             refreshToken = replacementToken,
             createdAtEpochMillis = createdAtEpochMillis,
             expiresAtEpochMillis = expiresAtEpochMillis,
         )
+        // push_devices cascades on session deletion. Rotation is the same login
+        // continuing, so carry the registration over; otherwise every token
+        // refresh silently drops incoming-call pushes until the app happens to
+        // re-register (which never occurs if it is killed or offline right after).
+        PushDevicesTable.update({ PushDevicesTable.sessionId eq current.sessionId }) {
+            it[PushDevicesTable.sessionId] = replacement.sessionId
+        }
+        AuthSessionsTable.deleteWhere { AuthSessionsTable.sessionId eq current.sessionId }
+        replacement
     }
 
     override fun deleteBySessionId(sessionId: String) {

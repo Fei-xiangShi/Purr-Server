@@ -36,15 +36,23 @@ class RecordingRetentionService(
     fun start() {
         if (closed.get() || !config.cleanupEnabled || !started.compareAndSet(false, true)) return
         job = scope.launch {
+            // Catch up after downtime instead of silently skipping a missed
+            // daily run. Failures retry at the configured interval.
             while (isActive && !closed.get()) {
+                var retry = false
                 try {
-                    delayProvider(millisUntilNextRun(nowProvider()))
-                    cleanupScheduledPass()
+                    val summary = cleanupScheduledPass()
+                    retry = summary.failed > 0
+                    logger.info("Recording retention pass: candidates={}, deleted={}, failed={}",
+                        summary.candidates, summary.deleted, summary.failed)
                 } catch (error: CancellationException) {
                     throw error
                 } catch (error: Throwable) {
+                    retry = true
                     logger.error("Recording retention pass failed", error)
                 }
+                val untilDailyRun = millisUntilNextRun(nowProvider())
+                delayProvider(if (retry) minOf(untilDailyRun, config.cleanupIntervalSeconds * 1_000L) else untilDailyRun)
             }
         }
     }
@@ -74,11 +82,13 @@ class RecordingRetentionService(
         var deleted = 0
         var failed = 0
         candidates.forEach { candidate ->
+            if (closed.get()) return@forEach
             val leased = repository.claimDeletion(
                 candidate = candidate,
                 workerId = workerId,
                 attemptedAtEpochMillis = nowEpochMillis,
-                leaseUntilEpochMillis = now.plusSeconds(config.cleanupLeaseSeconds).toEpochMilli(),
+                // A long pass must not claim later batches with an expired lease.
+                leaseUntilEpochMillis = maxOf(now, nowProvider()).plusSeconds(config.cleanupLeaseSeconds).toEpochMilli(),
             )
                 ?: return@forEach
             claimed++
@@ -109,7 +119,7 @@ class RecordingRetentionService(
                 deleted = total.deleted + batch.deleted,
                 failed = total.failed + batch.failed,
             )
-        } while (batch.candidates == config.cleanupBatchSize && batch.claimed > 0)
+        } while (!closed.get() && batch.candidates == config.cleanupBatchSize && batch.claimed > 0)
         return total
     }
 

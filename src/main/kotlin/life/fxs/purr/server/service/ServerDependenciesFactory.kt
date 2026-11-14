@@ -289,6 +289,9 @@ object ServerDependenciesFactory {
                     life.fxs.purr.server.application.port.PushDeliveryResult.Delivered
                 },
                 enabled = config.push.enabled,
+                isCallRinging = { callId ->
+                    callSessionRepository.find(callId)?.state == life.fxs.purr.server.model.CallState.WAITING
+                },
             )
             val durableEventSink = CompositeRealtimeEventSink(
                 listOf(realtimeEventPublisher, pushEventSink),
@@ -513,6 +516,15 @@ object ServerDependenciesFactory {
                         emptyRoomGraceMillis = config.callReconciliation.emptyRoomGraceSeconds * 1_000L,
                         batchSize = config.callReconciliation.batchSize,
                         recordingCommandStore = recordingCommandRepository,
+                        onCallFailure = { callId, error ->
+                            // Without this a LiveKit outage or bad credentials leave
+                            // calls stuck open with nothing in the log.
+                            reconciliationLogger.warn(
+                                "Call room reconciliation failed for call {}; will retry: {}",
+                                callId,
+                                error.toString(),
+                            )
+                        },
                     ),
                 ).also { it.start() }
             }
@@ -683,3 +695,5 @@ private data class RecordingAdapters(
 )
 
 private const val BCRYPT_LOG_ROUNDS = 12
+private val reconciliationLogger =
+    org.slf4j.LoggerFactory.getLogger("life.fxs.purr.server.call.CallRoomReconciliation")

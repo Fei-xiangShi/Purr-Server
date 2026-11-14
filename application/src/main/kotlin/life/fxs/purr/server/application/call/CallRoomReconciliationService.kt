@@ -25,6 +25,8 @@ class CallRoomReconciliationService(
     private val emptyRoomGraceMillis: Long,
     private val batchSize: Int,
     private val recordingCommandStore: RecordingCommandStore,
+    /** Reports a call that could not be reconciled in this pass; it is retried on the next one. */
+    private val onCallFailure: (callId: String, error: Throwable) -> Unit = { _, _ -> },
 ) {
     fun reconcileOnce(nowEpochMillis: Long): CallRoomReconciliationSummary {
         val calls = store.findOpenCalls(batchSize)
@@ -82,6 +84,7 @@ class CallRoomReconciliationService(
                 // A provider outage must leave the call untouched and retry on
                 // the next pass; one bad room must not abort the whole batch.
                 failed++
+                runCatching { onCallFailure(call.callId, error) }
             }
         }
         store.findEndedCallsForRoomCleanup(batchSize).forEach { call ->
@@ -96,6 +99,7 @@ class CallRoomReconciliationService(
                 }
             } catch (error: Throwable) {
                 failed++
+                runCatching { onCallFailure(call.callId, error) }
             }
         }
         return CallRoomReconciliationSummary(inspected, converged, failed)

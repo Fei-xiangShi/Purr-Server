@@ -3,26 +3,54 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0c1110">
 <title>Purr · 直播</title>
 <style>
-:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#0c1110;color:#edf5ed}
-*{box-sizing:border-box}body{margin:0;min-height:100dvh;display:flex;flex-direction:column}
-header{padding:20px max(24px,env(safe-area-inset-left));display:flex;align-items:center;gap:12px}
-.badge{font-size:12px;letter-spacing:.1em;background:#283d34;padding:5px 9px;border-radius:5px;color:#b5ebc6}
-main{width:min(1200px,100%);margin:auto;padding:0 20px 24px}h1{font-size:18px;margin:0;font-weight:600}
-#player{position:relative;background:#000;width:100%;aspect-ratio:16/9;border-radius:12px;overflow:hidden}
-video{width:100%;height:100%;object-fit:contain;display:block}#player:fullscreen{width:100vw;height:100dvh;border-radius:0;aspect-ratio:auto}#player:fullscreen video{object-fit:cover}
-#exit-fullscreen{display:none;position:absolute;top:max(16px,env(safe-area-inset-top));right:max(16px,env(safe-area-inset-right));background:#111b;z-index:2}#player:fullscreen #exit-fullscreen{display:block}
-#controls{display:flex;gap:10px;flex-wrap:wrap;padding:16px 0 10px}button{cursor:pointer;font:inherit;border:1px solid #4c6255;border-radius:8px;padding:10px 18px;background:#20372a;color:inherit}button:hover{background:#34533f}button:disabled{opacity:.45;cursor:default}
-#status{font-size:15px;min-height:24px;margin:8px 0;color:#c8decf}#quality,#note{font-size:13px;color:#8da596;line-height:1.7}footer{padding:0 24px 20px;font-size:12px;color:#64786b}
+:root{color-scheme:dark;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#0c1110;color:#edf5ed}
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{margin:0;min-height:100dvh;display:flex;flex-direction:column}
+header{padding:16px max(20px,env(safe-area-inset-right)) 16px max(20px,env(safe-area-inset-left));display:flex;align-items:center;gap:12px}
+h1{font-size:18px;margin:0;font-weight:600}
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;letter-spacing:.08em;background:#1c2622;padding:5px 10px;border-radius:999px;color:#9fb3a6}
+.badge::before{content:"";width:7px;height:7px;border-radius:50%;background:#5d7266}
+.badge[data-state=live]{background:#3a1d1f;color:#ffb4b0}.badge[data-state=live]::before{background:#ff5a52;animation:pulse 1.6s ease-in-out infinite}
+.badge[data-state=connecting],.badge[data-state=waiting]{background:#2e2a17;color:#ecd98a}.badge[data-state=connecting]::before,.badge[data-state=waiting]::before{background:#e6c64a}
+.badge[data-state=error]{color:#e0a9a5}.badge[data-state=error]::before{background:#b8635d}
+main{width:min(1200px,100%);margin:0 auto;padding:0 max(16px,env(safe-area-inset-right)) 24px max(16px,env(safe-area-inset-left));flex:1}
+#player{--ar:1.7778;position:relative;background:#000;width:min(100%,calc(78dvh*var(--ar)));aspect-ratio:var(--ar);margin:0 auto;border-radius:12px;overflow:hidden}
+video{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+#player:fullscreen{width:100vw;height:100dvh;border-radius:0;aspect-ratio:auto}
+#player[data-fit=cover]:fullscreen video{object-fit:cover}
+#spinner{display:none;position:absolute;inset:0;margin:auto;width:44px;height:44px;border:3px solid #ffffff2e;border-top-color:#b5ebc6;border-radius:50%;animation:spin .9s linear infinite;pointer-events:none}
+#player[data-state=connecting] #spinner,#player[data-state=waiting] #spinner{display:block}
+.overlay{position:absolute;z-index:2;background:#111c;border-color:#ffffff3d;backdrop-filter:blur(6px)}
+#unmute{left:50%;bottom:64px;transform:translateX(-50%);border-radius:999px;padding:10px 20px}
+#exit-fullscreen,#fit{display:none;top:max(16px,env(safe-area-inset-top))}
+#exit-fullscreen{right:max(16px,env(safe-area-inset-right))}#fit{left:max(16px,env(safe-area-inset-left))}
+#player:fullscreen #exit-fullscreen,#player:fullscreen #fit{display:block}
+#controls{display:flex;gap:10px;flex-wrap:wrap;padding:16px 0 10px}
+button{cursor:pointer;font:inherit;min-height:44px;border:1px solid #4c6255;border-radius:8px;padding:10px 18px;background:#20372a;color:inherit;touch-action:manipulation}
+button:hover{background:#34533f}button:focus-visible{outline:2px solid #b5ebc6;outline-offset:2px}button:disabled{opacity:.45;cursor:default}
+#status{font-size:15px;min-height:24px;margin:8px 0;color:#c8decf}
+#quality,#note{font-size:13px;color:#8da596;line-height:1.7;margin:6px 0}#quality{font-variant-numeric:tabular-nums}
+footer{padding:0 max(20px,env(safe-area-inset-right)) max(20px,env(safe-area-inset-bottom)) max(20px,env(safe-area-inset-left));font-size:12px;color:#64786b}
+@keyframes spin{to{transform:rotate(360deg)}}@keyframes pulse{50%{opacity:.35}}
+@media (max-width:520px){header{padding-top:12px;padding-bottom:12px}#player{border-radius:8px}#controls button{flex:1 1 30%;padding:10px 8px}}
+@media (prefers-reduced-motion:reduce){#spinner,.badge::before{animation-duration:0s!important;animation-iteration-count:1!important}}
 </style>
-<header><h1>Purr</h1><span class="badge">LIVE</span></header>
+<header><h1>Purr</h1><span id="badge" class="badge" data-state="idle">未播放</span></header>
 <main>
-<div id="player"><video id="video" controls playsinline muted autoplay></video><button id="exit-fullscreen">退出全屏</button></div>
-<div id="controls"><button id="play">开始观看</button><button id="stop" disabled>停止观看</button><button id="fullscreen">全屏</button></div>
+<div id="player" data-state="idle" data-fit="contain">
+<video id="video" controls playsinline muted autoplay aria-label="直播画面"></video>
+<div id="spinner" aria-hidden="true"></div>
+<button id="unmute" class="overlay" type="button" hidden>点击开启声音</button>
+<button id="fit" class="overlay" type="button">裁切填满</button>
+<button id="exit-fullscreen" class="overlay" type="button">退出全屏</button>
+</div>
+<div id="controls"><button id="play" type="button">开始观看</button><button id="stop" type="button" disabled>停止观看</button><button id="fullscreen" type="button">全屏</button></div>
 <p id="status" role="status" aria-live="polite">准备就绪</p>
 <p id="quality">连接后显示实际接收画质</p>
-<p id="note">打开链接即可观看，无需登录。默认静音播放，可在播放器中开启声音。直播期间可用同一链接重新打开或刷新。若未自动播放，请点击开始观看。</p>
+<p id="note">打开链接即可观看，无需登录。默认静音播放，可点击画面上的“开启声音”。直播期间可用同一链接重新打开或刷新；网络中断或主播重连时会自动重试。</p>
 </main><footer>只接收直播画面与节目声音，不会加入语音通话。</footer>
 <script src="/watch.js" defer></script>
 </html>
