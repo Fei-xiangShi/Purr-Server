@@ -192,7 +192,8 @@ class CallRoomReconciliationIntegrationTest {
                 ROOM_NAME, reportedParticipantCount = 0))
             roomLifecycle.handle(CallRoomEvent("finished", CallRoomEventType.ROOM_FINISHED, ROOM_NAME))
             assertEquals(CallState.ACTIVE, calls.find(CALL_ID)?.state)
-            assertEquals(null, commands.findOpenForCall(CALL_ID, RecordingCommandType.STOP))
+            assertNotNull(commands.findOpenForCall(CALL_ID, RecordingCommandType.STOP))
+            assertEquals(RecordingStatus.STOPPING, calls.find(CALL_ID)?.recordingStatus)
             val pairService = PairService(PairBondRepository(), UserRepository())
             val sessions = CallSessionService(
                 pairService = pairService,

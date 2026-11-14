@@ -24,6 +24,8 @@ data class CallRecord(
     val connectedAtEpochMillis: Long? = null,
     val durationMillis: Long? = null,
     val roomEmptySinceEpochMillis: Long? = null,
+    val recordingPaused: Boolean = false,
+    val recordingGeneration: Long = 0,
 )
 
 data class ActiveCallResolution(
@@ -56,6 +58,9 @@ interface CallSessionStore {
     fun endIfOpen(callId: String, endedAtEpochMillis: Long): EndCallResolution?
 
     fun claimRecordingStart(callId: String, updatedAtEpochMillis: Long): CallRecord?
+
+    /** Resume only after the previous segment and its commands are terminal. */
+    fun setRecordingPaused(callId: String, paused: Boolean): CallRecord? = null
 
     /**
      * Atomically starts recording only after the call has remained connected

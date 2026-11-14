@@ -9,6 +9,7 @@ import life.fxs.purr.server.application.port.CallRoomReconciliationStore
 import life.fxs.purr.server.application.port.WaitingCallTerminator
 import life.fxs.purr.server.application.port.RecordingCommandStore
 import life.fxs.purr.server.model.CallState
+import life.fxs.purr.server.model.RecordingStatus
 
 /**
  * Periodic server-side convergence for calls whose provider/client process
@@ -62,7 +63,11 @@ class CallRoomReconciliationService(
                         if (presentCount == 0) {
                             val observed = store.observeRoomEmpty(call.callId, nowEpochMillis)
                             val emptySince = observed?.roomEmptySinceEpochMillis ?: nowEpochMillis
-                            if (nowEpochMillis - emptySince >= emptyRoomGraceMillis) {
+                            // Recording stops as soon as the room is empty; the
+                            // call itself only ends after the grace period.
+                            if (!call.recordingPaused || call.recordingStatus.isInFlight ||
+                                nowEpochMillis - emptySince >= emptyRoomGraceMillis
+                            ) {
                                 roomEventHandler.handle(
                                     CallRoomEvent(
                                         eventId = "reconcile-empty-${call.callId}",
@@ -76,6 +81,31 @@ class CallRoomReconciliationService(
                             }
                         } else {
                             store.clearRoomEmptyObservation(call.callId)
+                            // Repairs a missed departure/return webhook. A room
+                            // that is already paused with nothing left to stop
+                            // needs no further work while one person waits.
+                            val alone = presentCount < MIN_PARTICIPANTS_TO_START_CALL
+                            val needsPause = alone && (
+                                !call.recordingPaused ||
+                                    call.recordingStatus == RecordingStatus.STARTING ||
+                                    call.recordingStatus == RecordingStatus.RECORDING
+                                )
+                            val needsResume = !alone && call.recordingPaused
+                            if (needsPause || needsResume) {
+                                roomEventHandler.handle(
+                                    CallRoomEvent(
+                                        eventId = "reconcile-recording-${call.callId}-$nowEpochMillis",
+                                        type = if (needsPause) {
+                                            CallRoomEventType.PARTICIPANT_LEFT
+                                        } else {
+                                            CallRoomEventType.PARTICIPANT_JOINED
+                                        },
+                                        roomName = call.roomName,
+                                        participant = CallRoomParticipant(isActive = true, isEgress = false),
+                                        reportedParticipantCount = presentCount,
+                                    ),
+                                )
+                            }
                         }
                     }
                     CallState.ENDED -> Unit

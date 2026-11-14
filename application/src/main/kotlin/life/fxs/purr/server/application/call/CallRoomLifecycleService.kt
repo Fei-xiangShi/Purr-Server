@@ -60,6 +60,7 @@ class CallRoomLifecycleService(
             // One returning participant is enough to keep an established call alive.
             // A reconnect into an established call is not a new activation.
             reconciliationStore.clearRoomEmptyObservation(call.callId)
+            maybeResumeRecording(event, call)
             return
         }
         if (call.state != CallState.WAITING) return
@@ -131,14 +132,20 @@ class CallRoomLifecycleService(
         if (event.participant?.isEgress == true) return
         val readerPresentCount = participantReader?.countPresentNonEgressParticipants(call.roomName)
         val webhookPresentCount = event.reportedParticipantCount
-        // Do not let a stale provider snapshot of zero end a call while the
-        // webhook still reports a participant in the room.
         val presentParticipantCount = when {
             readerPresentCount == null -> webhookPresentCount
                 ?: if (event.type == CallRoomEventType.ROOM_FINISHED) 0 else return
-            readerPresentCount == 0 && webhookPresentCount != null && webhookPresentCount > 0 -> webhookPresentCount
+            // An invitation ends immediately, without the ACTIVE grace period,
+            // so a stale provider snapshot of zero must not cancel it while the
+            // webhook still reports the caller in the room.
+            call.state != CallState.ACTIVE && readerPresentCount == 0 &&
+                webhookPresentCount != null && webhookPresentCount > 0 -> webhookPresentCount
+            // For an ACTIVE call the provider inventory excludes egress
+            // participants, while the webhook's raw room count may include
+            // them and would keep an abandoned room (and its recording) alive.
             else -> readerPresentCount
         }
+        if (presentParticipantCount < MIN_PARTICIPANTS_TO_START_CALL) pauseRecording(call)
         if (presentParticipantCount != 0) {
             reconciliationStore.clearRoomEmptyObservation(call.callId)
             return
@@ -169,6 +176,43 @@ class CallRoomLifecycleService(
             if (now - emptySince < emptyRoomGraceMillis) return
         }
         terminate(call.callId, now)
+    }
+
+    private fun pauseRecording(call: CallRecord) {
+        if (call.state != CallState.ACTIVE) return
+        val now = nowProvider().toEpochMilli()
+        transaction.execute {
+            val current = callSessionStore.setRecordingPaused(call.callId, true) ?: return@execute
+            val stopping = callSessionStore.claimRecordingStop(current.callId, current.recordingId, now)
+            if (stopping != null) {
+                recordingCommandStore.enqueueStop(stopping.callId, stopping.roomName, stopping.recordingId, now)
+            }
+        }
+        drainRecordingCommandsBestEffort()
+        recordingCommandWakeup?.wake()
+    }
+
+    private fun maybeResumeRecording(event: CallRoomEvent, call: CallRecord) {
+        if (!recordingEnabled || !call.recordingPaused) return
+        val pair = pairStore.findByPairId(call.pairId) ?: return
+        val expected = setOf(participantIdentity(pair.userAId, call.callId), participantIdentity(pair.userBId, call.callId))
+        val identities = participantReader?.activeNonEgressParticipantIdentities(call.roomName)
+        if (identities != null && !identities.containsAll(expected)) return
+        val count = participantReader?.countActiveNonEgressParticipants(call.roomName)
+            ?: event.reportedParticipantCount ?: 0
+        if (count < MIN_PARTICIPANTS_TO_START_CALL) return
+        if (!recordingConsentStore.hasAllConsents(call.callId, setOf(pair.userAId, pair.userBId), consentPolicyVersion)) return
+        val now = nowProvider().toEpochMilli()
+        transaction.execute {
+            val resumed = callSessionStore.setRecordingPaused(call.callId, false) ?: return@execute
+            val connectedAt = resumed.connectedAtEpochMillis ?: return@execute
+            recordingCommandStore.enqueueStart(
+                resumed.callId, resumed.roomName, now,
+                maxOf(now, CallDurationPolicy.recordingAvailableAtEpochMillis(connectedAt)),
+            )
+        }
+        drainRecordingCommandsBestEffort()
+        recordingCommandWakeup?.wake()
     }
 
     private fun participantIdentity(userId: String, callId: String): String = "$userId-$callId"

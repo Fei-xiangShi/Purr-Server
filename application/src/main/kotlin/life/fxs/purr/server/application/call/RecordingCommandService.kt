@@ -49,6 +49,13 @@ class RecordingCommandService(
                 "Recording is available after 30 seconds of connected call time",
             )
         }
+        if (call.recordingPaused) {
+            // The dispatcher would accept and silently drop this command.
+            throw ApplicationException(
+                ApplicationError.CONFLICT,
+                "Recording is paused until both participants are in the call",
+            )
+        }
         when (call.recordingStatus) {
             RecordingStatus.STARTING,
             RecordingStatus.RECORDING,

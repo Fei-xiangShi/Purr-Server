@@ -332,7 +332,7 @@ class CallRoomLifecycleServiceTest {
     }
 
     @Test
-    fun `webhook participant count prevents stale empty reader from ending call`() {
+    fun `raw webhook count including egress cannot override empty human inventory`() {
         val harness = harness(
             waitingCall().copy(
                 state = CallState.ACTIVE,
@@ -357,8 +357,79 @@ class CallRoomLifecycleServiceTest {
             ),
         )
 
-        assertEquals(CallState.ACTIVE, harness.calls.call.state)
+        assertEquals(CallState.ENDED, harness.calls.call.state)
+        assertEquals(1, harness.calls.endTransitions)
+    }
+
+    @Test
+    fun `stale empty inventory cannot cancel a ringing call while the webhook still reports the caller`() {
+        val harness = harness(
+            waitingCall(),
+            participantReader = object : CallRoomParticipantReader {
+                override fun countActiveNonEgressParticipants(roomName: String): Int = 0
+
+                override fun countPresentNonEgressParticipants(roomName: String): Int = 0
+
+                override fun presentNonEgressParticipantIdentities(roomName: String): Set<String> = emptySet()
+            },
+        )
+
+        harness.service.handle(
+            CallRoomEvent(
+                eventId = "stale-empty-reader-waiting",
+                type = CallRoomEventType.PARTICIPANT_LEFT,
+                roomName = ROOM_NAME,
+                participant = CallRoomParticipant(isActive = false, isEgress = false),
+                reportedParticipantCount = 1,
+            ),
+        )
+
+        assertEquals(CallState.WAITING, harness.calls.call.state)
         assertEquals(0, harness.calls.endTransitions)
+    }
+
+    @Test
+    fun `single departure pauses recording without ending call and both returning resume a new segment`() {
+        val harness = harness(waitingCall().copy(
+            state = CallState.ACTIVE,
+            connectedAtEpochMillis = NOW.minusSeconds(60).toEpochMilli(),
+            recordingStatus = RecordingStatus.RECORDING,
+            recordingId = "segment-1",
+        ))
+        val left = CallRoomEvent("left", CallRoomEventType.PARTICIPANT_LEFT, ROOM_NAME,
+            participant = CallRoomParticipant(false, false), reportedParticipantCount = 1)
+        harness.service.handle(left)
+        harness.service.handle(left)
+        assertEquals(CallState.ACTIVE, harness.calls.call.state)
+        assertEquals(true, harness.calls.call.recordingPaused)
+        assertEquals(RecordingStatus.STOPPING, harness.calls.call.recordingStatus)
+        assertEquals(1, harness.recordingCommands.stops.size)
+        assertEquals(0, harness.outbox.size)
+
+        harness.service.handle(joinedEvent(2))
+        assertEquals(0, harness.recordingCommands.starts.size)
+        harness.calls.call = harness.calls.call.copy(recordingStatus = RecordingStatus.STOPPED)
+        harness.service.handle(joinedEvent(1))
+        assertEquals(0, harness.recordingCommands.starts.size)
+        harness.service.handle(joinedEvent(2))
+        harness.service.handle(joinedEvent(2))
+        assertEquals(false, harness.calls.call.recordingPaused)
+        assertEquals(1L, harness.calls.call.recordingGeneration)
+        assertEquals(1, harness.recordingCommands.starts.size)
+    }
+
+    @Test
+    fun `empty room pauses immediately while call termination waits for grace`() {
+        val harness = harness(waitingCall().copy(
+            state = CallState.ACTIVE,
+            recordingStatus = RecordingStatus.RECORDING,
+            recordingId = "segment-1",
+        ), emptyRoomGraceMillis = 15_000L)
+        harness.service.handle(CallRoomEvent("left", CallRoomEventType.PARTICIPANT_LEFT, ROOM_NAME,
+            reportedParticipantCount = 0))
+        assertEquals(CallState.ACTIVE, harness.calls.call.state)
+        assertEquals(RecordingStatus.STOPPING, harness.calls.call.recordingStatus)
+        assertEquals(1, harness.recordingCommands.stops.size)
     }
 
     private fun harness(
@@ -574,6 +645,13 @@ class CallRecordingWebhookServiceTest {
 }
 
 private class MutableCallStore(initialCall: CallRecord) : CallSessionStore, CallRoomReconciliationStore {
+    override fun setRecordingPaused(callId: String, paused: Boolean): CallRecord? {
+        if (call.callId != callId || call.state != CallState.ACTIVE) return null
+        if (!paused && call.recordingStatus.isInFlight) return null
+        call = call.copy(recordingPaused = paused,
+            recordingGeneration = call.recordingGeneration + if (!paused && call.recordingPaused) 1 else 0)
+        return call
+    }
     override fun findOpenCalls(limit: Int) = listOf(call).filter { it.state != CallState.ENDED }.take(limit)
 
     override fun observeRoomEmpty(callId: String, observedAtEpochMillis: Long): CallRecord? {

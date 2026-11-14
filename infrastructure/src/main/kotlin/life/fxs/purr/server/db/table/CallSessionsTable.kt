@@ -17,6 +17,8 @@ object CallSessionsTable : Table("call_sessions") {
     val roomEmptySinceEpochMillis = long("room_empty_since_epoch_millis").nullable()
     val callState = varchar("call_state", 32)
     val recordingStatus = varchar("recording_status", 32)
+    val recordingPaused = bool("recording_paused").default(false)
+    val recordingGeneration = long("recording_generation").default(0)
     val recordingId = varchar("recording_id", 255).nullable()
     val recordingRecoveryAttempts = integer("recording_recovery_attempts").default(0)
     val recordingLastRecoveryAtEpochMillis = long("recording_last_recovery_at_epoch_millis").nullable()

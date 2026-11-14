@@ -43,8 +43,7 @@ class RecordingCommandRepository(
         recordingId = null,
         requestedAtEpochMillis = requestedAtEpochMillis,
         availableAtEpochMillis = availableAtEpochMillis,
-        // A call has one logical start command. The key must stay stable across
-        // duplicate webhooks and crash reconciliation passes.
+        // enqueue scopes the key to the current recording segment.
         idempotencyKey = "start:$callId",
     )
 
@@ -152,10 +151,14 @@ class RecordingCommandRepository(
 
         val callId = command[RecordingCommandsTable.callId]
         val effectiveRecordingId = result.recordingId ?: command[RecordingCommandsTable.recordingId]
+        val current = CallSessionsTable.selectAll().where { CallSessionsTable.callId eq callId }
+            .forUpdate().single()
         // The provider result and command completion are committed in the same
         // database transaction. A retry can therefore safely replay the command
         // if the process dies before this transaction commits.
-        val persisted = callRecordingRepository.updateCurrent(
+        val persisted = command[RecordingCommandsTable.recordingGeneration] != current[CallSessionsTable.recordingGeneration] ||
+            command[RecordingCommandsTable.commandType] == RecordingCommandType.DELETE_ROOM.name ||
+            callRecordingRepository.updateCurrent(
             callId,
             result.copy(recordingId = effectiveRecordingId),
         )
@@ -263,11 +266,12 @@ class RecordingCommandRepository(
                     callId = it[CallSessionsTable.callId],
                     roomName = it[CallSessionsTable.roomName],
                     type = when {
-                        it[CallSessionsTable.callState] == CallState.ENDED.wireValue -> RecordingCommandType.DELETE_ROOM
                         it[CallSessionsTable.recordingStatus] == RecordingStatus.STARTING.wireValue -> RecordingCommandType.START
-                        else -> RecordingCommandType.STOP
+                        it[CallSessionsTable.recordingStatus] == RecordingStatus.STOPPING.wireValue -> RecordingCommandType.STOP
+                        else -> RecordingCommandType.DELETE_ROOM
                     },
                     recordingId = it[CallSessionsTable.recordingId],
+                    generation = it[CallSessionsTable.recordingGeneration],
                 )
             }
 
@@ -276,6 +280,7 @@ class RecordingCommandRepository(
             val hasNonTerminal = RecordingCommandsTable.selectAll()
                 .where {
                     (RecordingCommandsTable.callId eq candidate.callId) and
+                        (RecordingCommandsTable.recordingGeneration eq candidate.generation) and
                         (RecordingCommandsTable.commandType eq candidate.type.name) and
                         (
                             RecordingCommandsTable.commandState inList listOf(
@@ -289,11 +294,11 @@ class RecordingCommandRepository(
             if (hasNonTerminal) return@forEach
 
             val requestedAt = nowEpochMillis
-            val key = when (candidate.type) {
+            val key = segmentKey(when (candidate.type) {
                 RecordingCommandType.START -> "start:${candidate.callId}"
                 RecordingCommandType.STOP -> "stop:${candidate.callId}"
                 RecordingCommandType.DELETE_ROOM -> "delete-room:${candidate.callId}"
-            }
+            }, candidate.type, candidate.generation)
             val commandId = commandIdProvider()
             RecordingCommandsTable.insertIgnore {
                 it[RecordingCommandsTable.commandId] = commandId
@@ -302,6 +307,7 @@ class RecordingCommandRepository(
                 it[roomName] = candidate.roomName
                 it[commandType] = candidate.type.name
                 it[recordingId] = candidate.recordingId
+                it[recordingGeneration] = candidate.generation
                 it[requestedAtEpochMillis] = requestedAt
                 it[availableAtEpochMillis] = requestedAt
                 it[attemptCount] = 0
@@ -333,23 +339,27 @@ class RecordingCommandRepository(
     ): RecordingCommandRecord = transaction {
         // Serializing against the call row makes the idempotency check safe on
         // databases that do not support partial unique indexes.
-        CallSessionsTable.selectAll()
+        val call = CallSessionsTable.selectAll()
             .where { CallSessionsTable.callId eq callId }
             .forUpdate()
             .single()
 
+        val generation = call[CallSessionsTable.recordingGeneration]
+        val key = segmentKey(idempotencyKey, type, generation)
+
         val existing = RecordingCommandsTable.selectAll()
-            .where { RecordingCommandsTable.idempotencyKey eq idempotencyKey }
+            .where { RecordingCommandsTable.idempotencyKey eq key }
             .singleOrNull()
         if (existing != null) return@transaction existing.toRecordingCommand()
 
         RecordingCommandsTable.insert {
             it[RecordingCommandsTable.commandId] = commandId
-            it[RecordingCommandsTable.idempotencyKey] = idempotencyKey
+            it[RecordingCommandsTable.idempotencyKey] = key
             it[RecordingCommandsTable.callId] = callId
             it[RecordingCommandsTable.roomName] = roomName
             it[RecordingCommandsTable.commandType] = type.name
             it[RecordingCommandsTable.recordingId] = recordingId
+            it[recordingGeneration] = generation
             it[RecordingCommandsTable.requestedAtEpochMillis] = requestedAtEpochMillis
             it[RecordingCommandsTable.availableAtEpochMillis] = availableAtEpochMillis
             it[attemptCount] = 0
@@ -380,6 +390,7 @@ class RecordingCommandRepository(
         state = RecordingCommandState.valueOf(this[RecordingCommandsTable.commandState]),
         completedAtEpochMillis = this[RecordingCommandsTable.completedAtEpochMillis],
         lastError = this[RecordingCommandsTable.lastError],
+        recordingGeneration = this[RecordingCommandsTable.recordingGeneration],
     )
 
     /** STOP cannot overtake a START whose provider result is still uncertain. */
@@ -389,22 +400,26 @@ class RecordingCommandRepository(
             RecordingCommandType.DELETE_ROOM.name -> RecordingCommandType.STOP
             else -> return true
         }
-        val start = RecordingCommandsTable.selectAll()
+        return RecordingCommandsTable.selectAll()
             .where {
                 (RecordingCommandsTable.callId eq command[RecordingCommandsTable.callId]) and
-                    (RecordingCommandsTable.commandType eq prerequisiteType.name)
+                    (RecordingCommandsTable.commandType eq prerequisiteType.name) and
+                    (RecordingCommandsTable.commandState eq RecordingCommandState.PENDING.name) and
+                    (RecordingCommandsTable.recordingGeneration eq command[RecordingCommandsTable.recordingGeneration])
             }
             .limit(1)
-            .singleOrNull()
-            ?: return true
-        return start[RecordingCommandsTable.commandState] != RecordingCommandState.PENDING.name
+            .count() == 0L
     }
+
+    private fun segmentKey(key: String, type: RecordingCommandType, generation: Long): String =
+        if (type == RecordingCommandType.DELETE_ROOM || generation == 0L) key else "$key:segment:$generation"
 
     private data class ReconciliationCandidate(
         val callId: String,
         val roomName: String,
         val type: RecordingCommandType,
         val recordingId: String?,
+        val generation: Long,
     )
 
     private companion object {

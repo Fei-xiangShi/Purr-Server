@@ -9,6 +9,7 @@ object RecordingCommandsTable : Table("recording_commands") {
     val roomName = varchar("room_name", 255)
     val commandType = varchar("command_type", 16)
     val recordingId = varchar("recording_id", 255).nullable()
+    val recordingGeneration = long("recording_generation").default(0)
     val requestedAtEpochMillis = long("requested_at_epoch_millis")
     val availableAtEpochMillis = long("available_at_epoch_millis")
     val attemptCount = integer("attempt_count").default(0)

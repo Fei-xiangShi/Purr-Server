@@ -81,6 +81,7 @@ internal fun CallStatusResult.toDto() = CallStatusDto(
     endedAtEpochMillis = endedAtEpochMillis,
     durationMillis = durationMillis,
     serverNowEpochMillis = serverNowEpochMillis,
+    recordingPaused = recordingPaused,
 )
 
 internal fun ActiveCallResult.toDto() = ActiveCallDto(

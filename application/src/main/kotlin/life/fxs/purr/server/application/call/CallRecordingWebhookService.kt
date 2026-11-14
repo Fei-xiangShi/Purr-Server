@@ -54,7 +54,7 @@ class CallRecordingWebhookService(
 
     private fun maybeStopEndedCallRecording(call: CallRecord?) {
         val storedCall = call ?: return
-        if (storedCall.state != CallState.ENDED) return
+        if (storedCall.state != CallState.ENDED && !storedCall.recordingPaused) return
         if (storedCall.recordingStatus !in setOf(RecordingStatus.STARTING, RecordingStatus.RECORDING)) return
         val requestedAt = nowProvider().toEpochMilli()
         transaction.execute {

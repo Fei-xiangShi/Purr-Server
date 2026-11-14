@@ -28,6 +28,8 @@ data class CallStatusResult(
     val endedAtEpochMillis: Long?,
     val durationMillis: Long?,
     val serverNowEpochMillis: Long,
+    /** True while recording is suspended because fewer than two participants are present. */
+    val recordingPaused: Boolean = false,
 )
 
 data class ActiveCallResult(

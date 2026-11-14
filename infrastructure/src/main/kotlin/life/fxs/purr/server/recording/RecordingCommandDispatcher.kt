@@ -141,15 +141,18 @@ class RecordingCommandDispatcher(
     private fun execute(command: RecordingCommandRecord, nowEpochMillis: Long): ProviderRecordingResult {
         val call = callSessionStore.find(command.callId)
             ?: error("Call ${command.callId} no longer exists")
+        if (command.type != RecordingCommandType.DELETE_ROOM && command.recordingGeneration != call.recordingGeneration) {
+            return call.toProviderRecordingResult(nowEpochMillis)
+        }
         val preserveProviderClock = command.type == RecordingCommandType.START &&
-            call.state == CallState.ENDED &&
+            (call.state == CallState.ENDED || call.recordingPaused) &&
             call.recordingStatus in setOf(RecordingStatus.STARTING, RecordingStatus.STOPPING)
         val result = when (command.type) {
             RecordingCommandType.START -> executeStart(command, call, nowEpochMillis)
             RecordingCommandType.STOP -> {
                 val recordingId = command.recordingId ?: call.recordingId
                 if (recordingId.isNullOrBlank()) {
-                    if (call.state == CallState.ENDED &&
+                    if ((call.state == CallState.ENDED || call.recordingPaused) &&
                         call.recordingStatus == RecordingStatus.STOPPED
                     ) {
                         return ProviderRecordingResult(
@@ -194,7 +197,7 @@ class RecordingCommandDispatcher(
         initialCall: CallRecord,
         nowEpochMillis: Long,
     ): ProviderRecordingResult {
-        if (initialCall.state == CallState.ENDED) {
+        if (initialCall.state == CallState.ENDED || initialCall.recordingPaused) {
             if (initialCall.recordingStatus in setOf(RecordingStatus.STARTING, RecordingStatus.STOPPING)) {
                 // The process may have died after the provider accepted START
                 // but before its id was committed. Reconcile only states that
@@ -235,7 +238,12 @@ class RecordingCommandDispatcher(
             -> initialCall
         }
 
-        if (call.state != CallState.ACTIVE) return call.toProviderRecordingResult(nowEpochMillis)
+        if (call.state != CallState.ACTIVE || call.recordingPaused) {
+            // A departure may have won the start claim race. Reconcile any
+            // uncertain provider request without creating another egress.
+            return recordingController.findRecordingForOperation(command.callId, command.roomName, command.commandId)
+                ?: ProviderRecordingResult(RecordingStatus.STOPPED, call.recordingId, nowEpochMillis)
+        }
         if (call.recordingStatus == RecordingStatus.RECORDING) {
             return call.toProviderRecordingResult(nowEpochMillis)
         }

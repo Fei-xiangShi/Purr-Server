@@ -12,4 +12,6 @@ data class CallStatusDto(
     val endedAtEpochMillis: Long? = null,
     val durationMillis: Long? = null,
     val serverNowEpochMillis: Long,
+    /** Additive: recording is suspended while fewer than two participants are present. */
+    val recordingPaused: Boolean = false,
 )

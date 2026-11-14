@@ -34,6 +34,7 @@ data class RecordingCommandRecord(
     val state: RecordingCommandState,
     val completedAtEpochMillis: Long?,
     val lastError: String?,
+    val recordingGeneration: Long = 0,
 )
 
 /**

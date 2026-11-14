@@ -14,7 +14,7 @@ that the peer has answered.
 | B rejects before connection | Send `/calls/{id}/end`, consume the local invitation on success | Conditionally end WAITING and enqueue `call_ended` for both users; free the pair for a new call |
 | A cancels before connection | End presentation immediately, clean local resources, synchronize `/end` independently | The same conditional WAITING transition ends the invitation |
 | Either participant leaves an ACTIVE call | Disconnect only the local media, audio, Telecom and foreground service | `/end` acknowledges local departure; keep ACTIVE while another participant remains |
-| One participant remains after connection | Keep the room and microphone controls; show that the peer has left | No single-participant expiry; preserve the call and recording until the remaining person leaves |
+| One participant remains after connection | Keep the room and microphone controls; show that the peer has left | Preserve the call, pause recording by stopping the current egress segment; resume with a new segment when both members return |
 | Last participant leaves | Finish local cleanup regardless of server request latency | Empty-room webhook starts the recovery grace; continued emptiness ends the call, stops recording and schedules room deletion |
 | Process is killed or final webhook is lost | `onDestroy` and HTTP delivery are not guaranteed | Reconcile provider membership; ACTIVE rooms must be empty for the configured grace period before ending |
 | Provider reports the room is missing | End through normal server-status observation | A LiveKit `404 / not_found` is empty inventory; proxy 404, authentication errors and outages are failures, not empty rooms |
@@ -24,6 +24,28 @@ Default reconciliation runs every 10 seconds. WAITING invitations expire after
 starting at the first empty observation. Provider disconnect detection and
 worker scheduling add latency. A room with one participant is retained after
 connection, regardless of elapsed time.
+
+Recording pauses as soon as fewer than two human participants are observed,
+including during the empty-room grace period. LiveKit Egress has no in-place
+pause operation, so each resume creates a separate recording in the same call
+history. The persisted pause flag prevents a delayed start from recording a
+single participant. Segment generations keep START/STOP commands idempotent
+without reusing a completed segment. Polling also repairs missed departure and
+return webhooks, and is what resumes recording when the second participant
+returns while the previous segment is still stopping (resume waits until that
+segment and its commands are terminal). Departure and return webhooks are judged
+against the provider's live participant inventory, so duplicated or reordered
+deliveries cannot pause a full room or resume a half-empty one. For an ACTIVE
+call, raw webhook room counts cannot override that inventory because they may
+include the egress participant; a WAITING invitation, which has no grace period
+and no egress, still trusts a positive webhook count over an empty snapshot.
+
+`GET /calls/{id}` reports the pause through the additive `recordingPaused`
+field; `recordingStatus` is `stopped` (or `stopping`) while paused. A manual
+`POST /calls/{id}/recording/start` is rejected with `409` while paused.
+Migration `V21__recording_pause_segments` adds `call_sessions.recording_paused`,
+`call_sessions.recording_generation` and `recording_commands.recording_generation`
+with defaults, so existing rows continue as generation 0 and unpaused.
 
 ## Problems corrected
 

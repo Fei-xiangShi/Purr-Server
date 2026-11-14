@@ -97,6 +97,28 @@ class PurrRoutesTest {
     }
 
     @Test
+    fun `malformed or incomplete request bodies are client errors`() = isolatedTestApplication {
+        val malformed = client.post("/auth/login") {
+            contentType(ContentType.Application.Json)
+            setBody("{\"username\":")
+        }
+        assertEquals(HttpStatusCode.BadRequest, malformed.status)
+        assertTrue(malformed.bodyAsText().contains("\"code\":\"bad_request\""))
+
+        val missingField = client.post("/auth/login") {
+            contentType(ContentType.Application.Json)
+            setBody("{\"username\":\"user-a\"}")
+        }
+        assertEquals(HttpStatusCode.BadRequest, missingField.status)
+
+        val wrongType = client.post("/auth/login") {
+            contentType(ContentType.Text.Plain)
+            setBody("hello")
+        }
+        assertEquals(HttpStatusCode.UnsupportedMediaType, wrongType.status)
+    }
+
+    @Test
     fun `login returns tokens and authenticated routes work`() = isolatedTestApplication {
         val login = client.post("/auth/login") {
             contentType(ContentType.Application.Json)
@@ -462,7 +484,9 @@ class PurrRoutesTest {
             header("Authorization", "Bearer $userBToken")
         }
         assertEquals(HttpStatusCode.OK, afterFirstLeave.status)
-        assertTrue(afterFirstLeave.bodyAsText().contains("\"recordingStatus\":\"recording\""), "recording after first leave")
+        val afterFirstLeaveBody = afterFirstLeave.bodyAsText()
+        assertTrue(afterFirstLeaveBody.contains("\"state\":\"active\""), "call remains active after first leave")
+        assertTrue(afterFirstLeaveBody.contains("\"recordingStatus\":\"stopped\""), "recording paused after first leave")
 
         client.postLiveKitWebhook(
             body = """

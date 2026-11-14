@@ -149,6 +149,7 @@ class CallSessionService(
             endedAtEpochMillis = endedAtEpochMillis,
             durationMillis = durationMillis,
             serverNowEpochMillis = serverNowEpochMillis,
+            recordingPaused = state == CallState.ACTIVE && recordingPaused,
         )
     }
 

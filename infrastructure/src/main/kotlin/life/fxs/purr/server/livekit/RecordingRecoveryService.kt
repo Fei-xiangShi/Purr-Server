@@ -107,7 +107,7 @@ class RecordingRecoveryService(
             return if (terminal) RecoveryOutcome.TERMINAL_FAILURE else RecoveryOutcome.RETRY_PENDING
         }
 
-        if (call.state == CallState.ENDED &&
+        if ((call.state == CallState.ENDED || call.recordingPaused) &&
             providerState.status in setOf(RecordingStatus.STARTING, RecordingStatus.RECORDING)
         ) {
             val stopped = recordingController.stopRecording(

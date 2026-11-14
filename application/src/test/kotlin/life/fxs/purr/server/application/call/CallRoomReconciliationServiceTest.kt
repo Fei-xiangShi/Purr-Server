@@ -5,6 +5,7 @@ import kotlin.test.assertEquals
 import life.fxs.purr.server.application.port.CallRecord
 import life.fxs.purr.server.application.port.CallRoomEvent
 import life.fxs.purr.server.application.port.CallRoomEventHandler
+import life.fxs.purr.server.application.port.CallRoomEventType
 import life.fxs.purr.server.application.port.CallRoomParticipantReader
 import life.fxs.purr.server.application.port.CallRoomReconciliationStore
 import life.fxs.purr.server.application.port.WaitingCallTerminator
@@ -28,7 +29,7 @@ class CallRoomReconciliationServiceTest {
 
         assertEquals(CallState.ACTIVE, store.call.state)
         assertEquals(null, store.call.roomEmptySinceEpochMillis)
-        assertEquals(emptyList(), events.events)
+        assertEquals(listOf(1, 1, 1), events.events.map { it.reportedParticipantCount })
     }
 
     @Test
@@ -40,12 +41,13 @@ class CallRoomReconciliationServiceTest {
 
         service.reconcileOnce(1_000L)
         service.reconcileOnce(1_099L)
-        assertEquals(0, events.events.size)
+        assertEquals(2, events.events.size)
         service.reconcileOnce(1_100L)
 
-        assertEquals(1, events.events.size)
-        assertEquals("reconcile-empty-call-1", events.events.single().eventId)
-        assertEquals(0, events.events.single().reportedParticipantCount)
+        assertEquals(3, events.events.size)
+        assertEquals("reconcile-empty-call-1", events.events.last().eventId)
+        assertEquals(0, events.events.last().reportedParticipantCount)
+        assertEquals(1_000L, store.call.roomEmptySinceEpochMillis)
     }
 
     @Test
@@ -61,7 +63,7 @@ class CallRoomReconciliationServiceTest {
         reader.presentCount = 0
         service.reconcileOnce(1_100L)
 
-        assertEquals(0, events.events.size)
+        assertEquals(listOf(0, 1, 0), events.events.map { it.reportedParticipantCount })
         assertEquals(1_100L, store.call.roomEmptySinceEpochMillis)
     }
 
@@ -82,6 +84,38 @@ class CallRoomReconciliationServiceTest {
         service.reconcileOnce(1_001L)
         assertEquals(1, events.events.size)
         assertEquals(2, events.events.single().reportedParticipantCount)
+    }
+
+    @Test
+    fun `paused room with one waiting participant and nothing left to stop is left alone`() {
+        val store = ReconciliationStore(activeCall().copy(recordingPaused = true, recordingStatus = RecordingStatus.STOPPED))
+        val events = RecordingEventHandler()
+        val service = service(store, MutableParticipantReader(1), events)
+
+        listOf(1_000L, 2_000L).forEach(service::reconcileOnce)
+
+        assertEquals(emptyList(), events.events)
+    }
+
+    @Test
+    fun `missed webhooks are repaired by pausing a lone recording and resuming once both are back`() {
+        val store = ReconciliationStore(activeCall().copy(recordingPaused = true, recordingStatus = RecordingStatus.RECORDING))
+        val reader = MutableParticipantReader(1)
+        val events = RecordingEventHandler()
+        val service = service(store, reader, events)
+
+        service.reconcileOnce(1_000L)
+        assertEquals(CallRoomEventType.PARTICIPANT_LEFT, events.events.single().type)
+
+        store.call = store.call.copy(recordingStatus = RecordingStatus.STOPPED)
+        reader.presentCount = 2
+        service.reconcileOnce(2_000L)
+        assertEquals(CallRoomEventType.PARTICIPANT_JOINED, events.events.last().type)
+        assertEquals(2, events.events.last().reportedParticipantCount)
+
+        store.call = store.call.copy(recordingPaused = false, recordingStatus = RecordingStatus.RECORDING)
+        service.reconcileOnce(3_000L)
+        assertEquals(2, events.events.size)
     }
 
     @Test

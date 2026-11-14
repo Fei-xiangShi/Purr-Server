@@ -142,6 +142,27 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
         return EndCallResolution(call, endedNow = updatedRows == 1)
     }
 
+    override fun setRecordingPaused(callId: String, paused: Boolean): CallRecord? = transaction {
+        val current = CallSessionsTable.selectAll()
+            .where { CallSessionsTable.callId eq callId }.forUpdate().singleOrNull()
+            ?.toCallRecord() ?: return@transaction null
+        if (current.state != CallState.ACTIVE) return@transaction null
+        if (current.recordingPaused == paused) return@transaction current
+        if (!paused) {
+            if (current.recordingStatus.isInFlight) return@transaction null
+            val pending = RecordingCommandsTable.selectAll().where {
+                (RecordingCommandsTable.callId eq callId) and
+                    (RecordingCommandsTable.commandState eq "PENDING")
+            }.count() > 0
+            if (pending) return@transaction null
+        }
+        CallSessionsTable.update({ CallSessionsTable.callId eq callId }) {
+            it[recordingPaused] = paused
+            if (!paused) it[recordingGeneration] = current.recordingGeneration + 1
+        }
+        find(callId)
+    }
+
     override fun claimRecordingStart(callId: String, updatedAtEpochMillis: Long): CallRecord? {
         return claimRecordingStartInternal(
             callId = callId,
@@ -174,6 +195,7 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
                     } ?: org.jetbrains.exposed.sql.Op.TRUE
                     (CallSessionsTable.callId eq callId) and
                         (CallSessionsTable.callState eq CallState.ACTIVE.wireValue) and
+                        (CallSessionsTable.recordingPaused eq false) and
                         (CallSessionsTable.recordingStatus inList startableRecordingStatuses) and
                         eligibleConnection
                 },
@@ -441,6 +463,8 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
         connectedAtEpochMillis = this[CallSessionsTable.connectedAtEpochMillis],
         durationMillis = this[CallSessionsTable.durationMillis],
         roomEmptySinceEpochMillis = this[CallSessionsTable.roomEmptySinceEpochMillis],
+        recordingPaused = this[CallSessionsTable.recordingPaused],
+        recordingGeneration = this[CallSessionsTable.recordingGeneration],
     )
 
     private fun findActiveByPairInCurrentTransaction(pairId: String): CallRecord? =
@@ -468,6 +492,8 @@ class CallSessionRepository : CallSessionStore, CallRoomReconciliationStore {
             it[roomEmptySinceEpochMillis] = call.roomEmptySinceEpochMillis
             it[callState] = call.state.wireValue
             it[recordingStatus] = call.recordingStatus.wireValue
+            it[recordingPaused] = call.recordingPaused
+            it[recordingGeneration] = call.recordingGeneration
             it[recordingId] = call.recordingId
             it[recordingRecoveryAttempts] = call.recordingRecoveryAttempts
             it[recordingLastRecoveryAtEpochMillis] = call.recordingLastRecoveryAtEpochMillis

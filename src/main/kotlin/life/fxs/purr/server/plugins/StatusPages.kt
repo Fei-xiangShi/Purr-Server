@@ -3,6 +3,9 @@ package life.fxs.purr.server.plugins
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
+import io.ktor.server.plugins.BadRequestException
+import io.ktor.server.plugins.ContentTransformationException
+import io.ktor.server.plugins.UnsupportedMediaTypeException
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.plugins.statuspages.exception
 import io.ktor.server.plugins.callid.callId
@@ -29,6 +32,27 @@ fun Application.configureStatusPages() {
             call.respond(
                 HttpStatusCode.BadRequest,
                 ErrorResponse("validation_error", cause.reasons.joinToString(), call.callId),
+            )
+        }
+        // Malformed JSON, missing fields and wrong content types are the
+        // caller's fault. Without these handlers they fall through to the
+        // generic handler below and surface as logged 500s.
+        exception<UnsupportedMediaTypeException> { call, _ ->
+            call.respond(
+                HttpStatusCode.UnsupportedMediaType,
+                ErrorResponse("unsupported_media_type", "Unsupported request content type", call.callId),
+            )
+        }
+        exception<ContentTransformationException> { call, _ ->
+            call.respond(
+                HttpStatusCode.BadRequest,
+                ErrorResponse("bad_request", "Request body could not be read", call.callId),
+            )
+        }
+        exception<BadRequestException> { call, _ ->
+            call.respond(
+                HttpStatusCode.BadRequest,
+                ErrorResponse("bad_request", "Malformed request", call.callId),
             )
         }
         exception<IllegalArgumentException> { call, cause ->
